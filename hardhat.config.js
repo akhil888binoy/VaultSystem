@@ -1,9 +1,10 @@
-require("@nomicfoundation/hardhat-toolbox");
+require("@nomiclabs/hardhat-ethers");
 require("@openzeppelin/hardhat-upgrades");
+require("dotenv").config();
 
 module.exports = {
   solidity: {
-    version: "0.8.20",
+    version: "0.8.0",
     settings: {
       optimizer: {
         enabled: true,
@@ -12,17 +13,31 @@ module.exports = {
     },
   },
   networks: {
+    arbitrum: {
+      url: process.env.ARBITRUM_RPC_URL || "https://arb1.arbitrum.io/rpc",
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      chainId: 42161,
+    },
     arbitrumSepolia: {
-      url: "https://arbitrum-sepolia-rpc.publicnode.com", // Arbitrum Sepolia RPC
-      accounts: [process.env.PRIVATE_KEY], // Deployer private key
+      url: process.env.ARBITRUM_SEPOLIA_RPC_URL || "https://sepolia-rollup.arbitrum.io/rpc",
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       chainId: 421614,
     },
   },
   etherscan: {
     apiKey: {
-      arbitrumSepolia: process.env.ARBISCAN_API_KEY, // Arbiscan API key
+      arbitrum: process.env.ARBISCAN_API_KEY || "",
+      arbitrumSepolia: process.env.ARBISCAN_API_KEY || "",
     },
     customChains: [
+      {
+        network: "arbitrum",
+        chainId: 42161,
+        urls: {
+          apiURL: "https://api.arbiscan.io/api",
+          browserURL: "https://arbiscan.io",
+        },
+      },
       {
         network: "arbitrumSepolia",
         chainId: 421614,

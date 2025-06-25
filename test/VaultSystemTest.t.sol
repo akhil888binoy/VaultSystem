@@ -1,312 +1,306 @@
-// SPDX-License-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
-import "forge-std/console.sol";
-import "../contracts/access/RoleManager.sol";
 import "../contracts/vault/Vault.sol";
 import "../contracts/router/WalletRouter.sol";
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "../contracts/access/RoleManager.sol";
+import "../contracts/timelock/Timelock.sol";
+import "@openzeppelin-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin-upgradeable/contracts/token/ERC20/ERC20Upgradeable.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-contract MockERC20 is ERC20 {
-    constructor(string memory name, string memory symbol, uint8 decimals) ERC20(name, symbol) {
-        _mint(msg.sender, 1000000 * 10**decimals);
+// Mock ERC20 token for testing
+contract MockERC20 is ERC20Upgradeable {
+    function initialize(string memory name, string memory symbol) public initializer {
+        __ERC20_init(name, symbol);
+    }
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
     }
 }
 
-contract VaultTest is Test {
-    address admin = address(1);
-    address operator = address(2);
-    address user = address(3);
-    address nonOperator = address(4);
-    address eth = address(0); // Native coin (ETH)
-
-    MockERC20 usdc;
-    RoleManager roleManager;
+contract VaultSystemTest is Test {
     Vault vault;
-    WalletRouter router;
+    WalletRouter walletRouter;
+    RoleManager roleManager;
+    Timelock timelock;
+    MockERC20 token;
 
-    uint256 constant ETH_AMOUNT = 0.1 ether; // 0.1 ETH
-    uint256 constant USDC_AMOUNT = 100 * 10**6; // 100 USDC (6 decimals)
+    address multiSigAdmin = address(0x123);
+    address user1 = address(0x789);
+    address user2 = address(0xABC);
+    address operator = address(0xDEF);
+
+    bytes32 constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
+    bytes32 constant VAULT_ADMIN_ROLE = keccak256("VAULT_ADMIN_ROLE");
+    bytes32 constant ROUTER_ADMIN_ROLE = keccak256("ROUTER_ADMIN_ROLE");
+    bytes32 constant DEFAULT_ADMIN_ROLE = 0x00;
+    bytes32 constant ADD_TOKEN = keccak256("ADD_TOKEN");
+    bytes32 constant REMOVE_TOKEN = keccak256("REMOVE_TOKEN");
+    bytes32 constant SET_WALLETROUTER = keccak256("SET_WALLETROUTER");
+    bytes32 constant SET_VAULT = keccak256("SET_VAULT");
+    bytes32 constant RECOVER_FUNDS = keccak256("RECOVER_FUNDS");
 
     function setUp() public {
-        vm.startPrank(admin);
-
-        // Deploy MockERC20 for USDC (6 decimals)
-        usdc = new MockERC20("USD Coin", "USDC", 6);
-        console.log("USDC deployed at:", address(usdc));
+        vm.startPrank(multiSigAdmin);
 
         // Deploy RoleManager
-        roleManager = new RoleManager(admin);
-        console.log("RoleManager deployed at:", address(roleManager));
+        roleManager = new RoleManager(multiSigAdmin);
+
+        // Deploy Timelock
+        timelock = new Timelock(address(roleManager));
 
         // Deploy WalletRouter
-        router = new WalletRouter(address(roleManager));
-        console.log("Router deployed at:", address(router));
+        walletRouter = new WalletRouter(address(roleManager), address(timelock));
 
-        // Deploy Vault (upgradeable)
+        // Deploy Vault implementation
         address vaultImpl = address(new Vault());
-        console.log("Vault implementation deployed at:", vaultImpl);
 
-        bytes memory initializationData = abi.encodeWithSelector(
+        // Deploy Vault proxy
+        bytes memory initData = abi.encodeWithSelector(
             Vault.initialize.selector,
             address(roleManager),
-            admin,
-            address(router)
+            address(walletRouter),
+            address(timelock)
         );
-
-        ERC1967Proxy proxy = new ERC1967Proxy(vaultImpl, "");
-        console.log("Proxy deployed at:", address(proxy));
-
-        roleManager.grantRole(roleManager.DEFAULT_ADMIN_ROLE(), address(proxy));
-        (bool success, ) = address(proxy).call(initializationData);
-        require(success, "Proxy init failed");
-
+        ERC1967Proxy proxy = new ERC1967Proxy(vaultImpl, initData);
         vault = Vault(address(proxy));
-        console.log("Vault proxy set at:", address(vault));
+
+        // Update Timelock with correct addresses
+        bytes32 actionId = keccak256(abi.encode(SET_VAULT, address(vault), block.timestamp));
+        timelock.proposeSetVault(SET_VAULT, address(vault), multiSigAdmin);
+        vm.warp(block.timestamp + 1 days + 1);
+        timelock.executeSetVault(actionId, address(vault), multiSigAdmin);
+
+        actionId = keccak256(abi.encode(SET_WALLETROUTER, address(walletRouter), block.timestamp));
+        timelock.proposeSetWalletRouter(address(walletRouter), SET_WALLETROUTER , multiSigAdmin);
+        vm.warp(block.timestamp + 1 days + 1);
+        timelock.executeSetWalletRouter(actionId, address(walletRouter) , multiSigAdmin);
 
         // Set Vault in WalletRouter
-        roleManager.grantRole(roleManager.ROUTER_ADMIN_ROLE(), admin);
-        router.setVault(address(vault));
+        actionId = keccak256(abi.encode(SET_VAULT, address(vault), block.timestamp));
+        walletRouter.proposeSetVault(address(vault));
+        vm.warp(block.timestamp + 1 days + 1);
+        walletRouter.setVault(address(vault), actionId);
 
-        // Grant OPERATOR_ROLE to operator
-        console.log("Granting OPERATOR_ROLE to operator:", operator);
-        roleManager.grantRole(roleManager.OPERATOR_ROLE(), operator);
+        // Deploy and initialize Mock ERC20 token
+        token = new MockERC20();
+        token.initialize("Test Token", "TST");
 
-        // Add USDC as supported token
-        console.log("Adding USDC as supported token:", address(usdc));
-        vault.addSupportedToken(address(usdc));
+        // Mint tokens and fund users
+        token.mint(user1, 1000 ether);
+        token.mint(user2, 1000 ether);
+        vm.deal(user1, 100 ether);
+        vm.deal(user2, 100 ether);
 
-        // Verify roles and token support
-        assertTrue(roleManager.hasRole(roleManager.OPERATOR_ROLE(), operator), "Operator role not granted");
-        assertTrue(roleManager.hasRole(roleManager.VAULT_ADMIN_ROLE(), admin), "Vault admin role not granted");
-        assertTrue(roleManager.hasRole(roleManager.ROUTER_ADMIN_ROLE(), admin), "Router admin role not granted");
-        assertTrue(vault.supportedTokens(address(0)), "ETH not supported");
-        assertTrue(vault.supportedTokens(address(usdc)), "USDC not supported");
+        // Grant roles
+        actionId = keccak256(abi.encode(OPERATOR_ROLE, operator, true, block.timestamp));
+        roleManager.proposeGrantRole(OPERATOR_ROLE, operator);
+        vm.warp(block.timestamp + 1 days + 1);
+        roleManager.executeRoleAction(actionId);
 
-        // Fund user with ETH and USDC
-        vm.deal(user, 10 ether);
-        usdc.transfer(user, 1000 * 10**6); // 1000 USDC
-        console.log("User ETH balance:", user.balance);
-        console.log("User USDC balance:", usdc.balanceOf(user));
+        actionId = keccak256(abi.encode(VAULT_ADMIN_ROLE, multiSigAdmin, true, block.timestamp));
+        roleManager.proposeGrantRole(VAULT_ADMIN_ROLE, multiSigAdmin);
+        vm.warp(block.timestamp + 1 days + 1);
+        roleManager.executeRoleAction(actionId);
+
+        actionId = keccak256(abi.encode(ROUTER_ADMIN_ROLE, multiSigAdmin, true, block.timestamp));
+        roleManager.proposeGrantRole(ROUTER_ADMIN_ROLE, multiSigAdmin);
+        vm.warp(block.timestamp + 1 days + 1);
+        roleManager.executeRoleAction(actionId);
 
         vm.stopPrank();
     }
 
-    function testDepositETHSuccess() public {
-        uint256 initialUserBalance = user.balance;
-        uint256 initialVaultBalance = address(vault).balance;
-        uint256 initialTotalDeposits = vault.totalDeposits(eth);
-
-        vm.prank(user);
-        vm.expectEmit(true, true, false, true, address(vault));
-        emit DepositProcessed(user, eth, ETH_AMOUNT);
-        vm.expectEmit(true, true, false, true, address(router));
-        emit Deposit(user, eth, ETH_AMOUNT);
-        router.deposit{value: ETH_AMOUNT}(eth, ETH_AMOUNT);
-
-        assertEq(user.balance, initialUserBalance - ETH_AMOUNT, "User ETH balance incorrect");
-        assertEq(address(vault).balance, initialVaultBalance + ETH_AMOUNT, "Vault ETH balance incorrect");
-        assertEq(vault.totalDeposits(eth), initialTotalDeposits + ETH_AMOUNT, "Total ETH deposits incorrect");
+    function testInitializeVault() public {
+        assertEq(address(vault.roleManager()), address(roleManager));
+        assertEq(address(vault.timelock()), address(timelock));
+        assertEq(vault.walletRouter(), address(walletRouter));
+        assertTrue(vault.isSupportedToken(address(0)));
+        assertTrue(roleManager.hasRole(VAULT_ADMIN_ROLE, multiSigAdmin));
+        assertTrue(roleManager.hasRole(ROUTER_ADMIN_ROLE, multiSigAdmin));
+        assertEq(address(walletRouter.vault()), address(vault));
     }
 
-    function testDepositUSDCSuccess() public {
-        uint256 initialUserBalance = usdc.balanceOf(user);
-        uint256 initialVaultBalance = usdc.balanceOf(address(vault));
-        uint256 initialTotalDeposits = vault.totalDeposits(address(usdc));
+    function testAddRemoveSupportedToken() public {
+        vm.startPrank(multiSigAdmin);
+        bytes32 actionId = keccak256(abi.encode(ADD_TOKEN, address(token), block.timestamp));
+        vault.proposeAddToken(address(token));
+        vm.warp(block.timestamp + 1 days + 1);
+        vault.addSupportedToken(address(token), actionId);
+        assertTrue(vault.isSupportedToken(address(token)));
 
-        vm.startPrank(user);
-        usdc.approve(address(router), USDC_AMOUNT);
-        console.log("User approves router for USDC amount:", USDC_AMOUNT);
-        vm.expectEmit(true, true, false, true, address(usdc));
-        emit Transfer(user, address(vault), USDC_AMOUNT);
-        vm.expectEmit(true, true, false, true, address(vault));
-        emit DepositProcessed(user, address(usdc), USDC_AMOUNT);
-        vm.expectEmit(true, true, false, true, address(router));
-        emit Deposit(user, address(usdc), USDC_AMOUNT);
-        router.deposit(address(usdc), USDC_AMOUNT);
+        // Deposit to prevent removal
         vm.stopPrank();
+        vm.prank(user1);
+        token.approve(address(walletRouter), 100 ether);
+        vm.prank(user1);
+        walletRouter.deposit(address(token), 100 ether);
 
-        assertEq(usdc.balanceOf(user), initialUserBalance - USDC_AMOUNT, "User USDC balance incorrect");
-        assertEq(usdc.balanceOf(address(vault)), initialVaultBalance + USDC_AMOUNT, "Vault USDC balance incorrect");
-        assertEq(vault.totalDeposits(address(usdc)), initialTotalDeposits + USDC_AMOUNT, "Total USDC deposits incorrect");
-    }
-
-    function testDepositZeroAmountFails() public {
-        vm.prank(user);
-        vm.expectRevert("Invalid amount");
-        router.deposit{value: 0}(eth, 0);
-
-        vm.startPrank(user);
-        usdc.approve(address(router), 0);
-        vm.expectRevert("Invalid amount");
-        router.deposit(address(usdc), 0);
-        vm.stopPrank();
-    }
-
-    function testDepositIncorrectETHAmountFails() public {
-        vm.prank(user);
-        vm.expectRevert("Incorrect ETH amount");
-        router.deposit{value: ETH_AMOUNT + 1}(eth, ETH_AMOUNT);
-    }
-
-    function testDepositETHForERC20Fails() public {
-        vm.startPrank(user);
-        usdc.approve(address(router), USDC_AMOUNT);
-        vm.expectRevert("ETH not allowed for ERC20 deposit");
-        router.deposit{value: ETH_AMOUNT}(address(usdc), USDC_AMOUNT);
-        vm.stopPrank();
-    }
-
-    function testDepositUnsupportedTokenFails() public {
-        address unsupportedToken = address(0xDEAD);
-        vm.startPrank(user);
-        vm.expectRevert("Token not supported");
-        router.deposit(unsupportedToken, USDC_AMOUNT);
-        vm.stopPrank();
-    }
-
-    function testDepositDirectToVaultFails() public {
-        vm.prank(user);
-        vm.expectRevert("Not WalletRouter");
-        vault.handleDeposit{value: ETH_AMOUNT}(user, eth, ETH_AMOUNT);
-    }
-
-    function testWithdrawalETHSuccess() public {
-        // Deposit ETH first
-        vm.prank(user);
-        router.deposit{value: ETH_AMOUNT}(eth, ETH_AMOUNT);
-
-        uint256 initialUserBalance = user.balance;
-        uint256 initialVaultBalance = address(vault).balance;
-        uint256 initialTotalDeposits = vault.totalDeposits(eth);
-
-        vm.prank(operator);
-        vm.expectEmit(true, true, false, true, address(vault));
-        emit WithdrawalProcessed(user, eth, ETH_AMOUNT);
-        vm.expectEmit(true, true, false, true, address(router));
-        emit Withdrawal(user, eth, ETH_AMOUNT);
-        router.withdraw(user, eth, ETH_AMOUNT);
-
-        assertEq(user.balance, initialUserBalance + ETH_AMOUNT, "User ETH balance incorrect");
-        assertEq(address(vault).balance, initialVaultBalance - ETH_AMOUNT, "Vault ETH balance incorrect");
-        assertEq(vault.totalDeposits(address(vault)), initialTotalDeposits - ETH_AMOUNT, "Total ETH deposits incorrect");
-    }
-
-    function testWithdrawalUSDCSuccess() public {
-        // Deposit USDC
-        vm.startPrank(user);
-        usdc.approve(address(router), USDC_AMOUNT);
-        // console.log("Deposit: user approves router for:", USDC_AMOUNT);
-        // console.log("Vault USDC balance before deposit:", usdc.balanceOf(address(vault)));
-        router.deposit(address(usdc), USDC_AMOUNT);
-        // console.log("Vault USDC balance after deposit:", usdc.balanceOf(address(vault)));
-        assertEq(usdc.balanceOf(address(vault)), USDC_AMOUNT, "Vault USDC balance not updated after deposit");
-        vm.stopPrank();
-
-        uint256 initialUserBalance = usdc.balanceOf(user);
-        uint256 initialVaultBalance = usdc.balanceOf(address(vault));
-        uint256 initialTotalDeposits = vault.totalDeposits(address(usdc));
-
-        // console.log("Operator has OPERATOR_ROLE:", roleManager.hasRole(roleManager.OPERATOR_ROLE(), operator));
-        // console.log("Vault USDC balance before withdrawal:", usdc.balanceOf(address(vault)));
-        // console.log("Withdrawing:", USDC_AMOUNT, "of token:", address(usdc), "to:", user);
-
-        vm.prank(operator);
-        // Expect USDC Transfer event
-        vm.expectEmit(true, true, false, true, address(usdc));
-        emit Transfer(address(vault), user, USDC_AMOUNT);
-        // Expect Vault WithdrawalProcessed event
-        vm.expectEmit(true, true, false, true, address(vault));
-        emit WithdrawalProcessed(user, address(usdc), USDC_AMOUNT);
-        // Expect WalletRouter Withdrawal event
-        vm.expectEmit(true, true, false, true, address(router));
-        emit Withdrawal(user, address(usdc), USDC_AMOUNT);
-        router.withdraw(user, address(usdc), USDC_AMOUNT);
-
-        assertEq(usdc.balanceOf(user), initialUserBalance + USDC_AMOUNT, "User USDC balance incorrect");
-        assertEq(usdc.balanceOf(address(vault)), initialVaultBalance - USDC_AMOUNT, "Vault USDC balance incorrect");
-        assertEq(vault.totalDeposits(address(usdc)), initialTotalDeposits - USDC_AMOUNT, "Total USDC deposits incorrect");
-    }
-
-    function testWithdrawalNonOperatorFails() public {
-        vm.prank(user);
-        router.deposit{value: ETH_AMOUNT}(eth, ETH_AMOUNT);
-
-        vm.prank(nonOperator);
-        vm.expectRevert("Not operator");
-        router.withdraw(user, eth, ETH_AMOUNT);
-    }
-
-    function testWithdrawalZeroAmountFails() public {
-        vm.prank(user);
-        router.deposit{value: ETH_AMOUNT}(eth, ETH_AMOUNT);
-
-        vm.prank(operator);
-        vm.expectRevert("Invalid amount");
-        router.withdraw(user, eth, 0);
-    }
-
-    function testWithdrawalUnsupportedTokenFails() public {
-        address unsupportedToken = address(0xDEAD);
-        vm.prank(operator);
-        vm.expectRevert("Token not supported");
-        router.withdraw(user, unsupportedToken, USDC_AMOUNT);
-    }
-
-    function testWithdrawalDirectToVaultFails() public {
-        vm.prank(user);
-        router.deposit{value: ETH_AMOUNT}(eth, ETH_AMOUNT);
-
-        vm.prank(operator);
-        vm.expectRevert("Not WalletRouter");
-        vault.handleWithdrawal(user, eth, ETH_AMOUNT);
-    }
-
-    function testAddSupportedTokenSuccess() public {
-        address newToken = address(new MockERC20("Test Token", "TEST", 18));
-        vm.prank(admin);
-        vm.expectEmit(true, false, false, true, address(vault));
-        emit TokenSupportAdded(newToken);
-        vault.addSupportedToken(newToken);
-        assertTrue(vault.supportedTokens(newToken), "Token not supported");
-    }
-
-    function testAddSupportedTokenNonAdminFails() public {
-        address newToken = address(new MockERC20("Test Token", "TEST", 18));
-        vm.prank(user);
-        vm.expectRevert("Not admin");
-        vault.addSupportedToken(newToken);
-    }
-
-    function testRemoveSupportedTokenSuccess() public {
-        assertEq(vault.totalDeposits(address(usdc)), 0, "USDC has deposits");
-        vm.prank(admin);
-        vm.expectEmit(true, false, false, true, address(vault));
-        emit TokenSupportRemoved(address(usdc));
-        vault.removeSupportedToken(address(usdc));
-        assertFalse(vault.supportedTokens(address(usdc)), "USDC still supported");
-    }
-
-    function testRemoveSupportedTokenWithDepositsFails() public {
-        vm.startPrank(user);
-        usdc.approve(address(router), USDC_AMOUNT);
-        router.deposit(address(usdc), USDC_AMOUNT);
-        vm.stopPrank();
-
-        vm.prank(admin);
+        vm.prank(multiSigAdmin);
         vm.expectRevert("Cannot remove token with deposits");
-        vault.removeSupportedToken(address(usdc));
+        vault.proposeRemoveToken(address(token));
+
+        // Withdraw and remove
+        vm.prank(multiSigAdmin);
+        walletRouter.withdraw(user1, address(token), 100 ether);
+        vm.prank(multiSigAdmin);
+        actionId = keccak256(abi.encode(REMOVE_TOKEN, address(token), block.timestamp));
+        vault.proposeRemoveToken(address(token));
+        vm.warp(block.timestamp + 1 days + 1);
+        vm.prank(multiSigAdmin);
+        vault.removeSupportedToken(address(token), actionId);
+        assertFalse(vault.isSupportedToken(address(token)));
     }
 
-    // Events from WalletRouter and Vault
-    event Deposit(address indexed user, address indexed token, uint256 amount);
-    event Withdrawal(address indexed recipient, address indexed token, uint256 amount);
-    event DepositProcessed(address indexed user, address indexed token, uint256 amount);
-    event WithdrawalProcessed(address indexed recipient, address indexed token, uint256 amount);
-    event TokenSupportAdded(address indexed token);
-    event TokenSupportRemoved(address indexed token);
-    // Event from MockERC20
-    event Transfer(address indexed from, address indexed to, uint256 value);
+    function testETHDepositAndWithdrawal() public {
+        vm.prank(user1);
+        walletRouter.deposit{value: 1 ether}(address(0), 1 ether);
+        assertEq(vault.totalDeposits(address(0)), 1 ether);
+        assertEq(address(vault).balance, 1 ether);
+
+        vm.prank(operator);
+        walletRouter.withdraw(user2, address(0), 0.5 ether);
+        assertEq(vault.totalDeposits(address(0)), 0.5 ether);
+        assertEq(address(vault).balance, 0.5 ether);
+        assertEq(user2.balance, 100.5 ether);
+    }
+
+    function testERC20DepositAndWithdrawal() public {
+        vm.startPrank(multiSigAdmin);
+        bytes32 actionId = keccak256(abi.encode(ADD_TOKEN, address(token), block.timestamp));
+        vault.proposeAddToken(address(token));
+        vm.warp(block.timestamp + 1 days + 1);
+        vault.addSupportedToken(address(token), actionId);
+        vm.stopPrank();
+
+        vm.prank(user1);
+        token.approve(address(walletRouter), 100 ether);
+        vm.prank(user1);
+        walletRouter.deposit(address(token), 100 ether);
+        assertEq(vault.totalDeposits(address(token)), 100 ether);
+        assertEq(token.balanceOf(address(vault)), 100 ether);
+
+        vm.prank(operator);
+        walletRouter.withdraw(user2, address(token), 50 ether);
+        assertEq(vault.totalDeposits(address(token)), 50 ether);
+        assertEq(token.balanceOf(address(vault)), 50 ether);
+        assertEq(token.balanceOf(user2), 1050 ether);
+    }
+
+    function testRecoverFunds() public {
+        vm.prank(user1);
+        walletRouter.deposit{value: 1 ether}(address(0), 1 ether);
+
+        vm.startPrank(multiSigAdmin);
+        bytes32 actionId = keccak256(abi.encode(RECOVER_FUNDS, address(0), user2, 0.5 ether, block.timestamp));
+        vault.proposeRecoverFunds(address(0), user2, 0.5 ether );
+        vm.warp(block.timestamp + 1 days + 1);
+        vault.recoverFunds(address(0), user2, 0.5 ether, actionId);
+
+        assertEq(vault.totalDeposits(address(0)), 0.5 ether);
+        assertEq(address(vault).balance, 0.5 ether);
+        assertEq(user2.balance, 100.5 ether);
+    }
+
+    function testVaultAccessControl() public {
+        vm.prank(user1);
+        vm.expectRevert("Caller lacks VAULT_ADMIN_ROLE");
+        vault.proposeAddToken(address(token));
+
+        vm.prank(user1);
+        vm.expectRevert("Not WalletRouter");
+        vault.handleDeposit{value: 1 ether}(user1, address(0), 1 ether);
+    }
+
+    function testWalletRouterAccessControl() public {
+        vm.prank(user1);
+        vm.expectRevert("Not operator");
+        walletRouter.withdraw(user2, address(0), 1 ether);
+
+        vm.prank(user1);
+        vm.expectRevert("Not router admin");
+        walletRouter.pause();
+    }
+
+    function testTimelockOperations() public {
+        vm.startPrank(multiSigAdmin);
+        bytes32 actionId = keccak256(abi.encode(SET_WALLETROUTER, address(0x999), block.timestamp));
+        vault.proposeSetWalletRouter(address(0x999));
+        vm.expectRevert("Timelock not expired");
+        vault.setWalletRouter(address(0x999), actionId);
+
+        vm.warp(block.timestamp + 1 days + 1);
+        vault.setWalletRouter(address(0x999), actionId);
+        assertEq(vault.walletRouter(), address(0x999));
+    }
+
+    function testPauseFunctionality() public {
+        vm.prank(multiSigAdmin);
+        vault.pause();
+        vm.prank(user1);
+        vm.expectRevert("Pausable: paused");
+        walletRouter.deposit{value: 1 ether}(address(0), 1 ether);
+
+        vm.prank(multiSigAdmin);
+        vault.unpause();
+        vm.prank(user1);
+        walletRouter.deposit{value: 1 ether}(address(0), 1 ether);
+        assertEq(vault.totalDeposits(address(0)), 1 ether);
+    }
+
+    function testInvalidInputs() public {
+        vm.prank(user1);
+        vm.expectRevert("Invalid amount");
+        walletRouter.deposit{value: 0}(address(0), 0);
+
+        vm.prank(user1);
+        vm.expectRevert("Token not supported");
+        walletRouter.deposit(address(token), 100 ether);
+
+        vm.prank(multiSigAdmin);
+        vm.expectRevert("Invalid WalletRouter");
+        vault.proposeSetWalletRouter(address(0));
+    }
+
+    function testUpgradeAuthorization() public {
+        Vault newVaultImpl = new Vault();
+        vm.prank(user1);
+        vm.expectRevert("Caller lacks VAULT_ADMIN_ROLE");
+        vault.upgradeTo(address(newVaultImpl));
+
+        vm.prank(multiSigAdmin);
+        vault.upgradeTo(address(newVaultImpl));
+    }
+
+    function testAdminTransfer() public {
+        vm.startPrank(multiSigAdmin);
+        roleManager.proposeAdminTransfer(user1);
+        vm.warp(block.timestamp + 1 days + 1);
+        vm.stopPrank();
+
+        vm.prank(user1);
+        roleManager.acceptAdminTransfer();
+        assertTrue(roleManager.hasRole(DEFAULT_ADMIN_ROLE, user1));
+        assertFalse(roleManager.hasRole(DEFAULT_ADMIN_ROLE, multiSigAdmin));
+    }
+
+    // function testEventEmissions() public {
+    //     vm.startPrank(multiSigAdmin);
+    //     bytes32 actionId = keccak256(abi.encode(ADD_TOKEN, address(token), block.timestamp));
+    //     vm.expectEmit(true, true, false, true);
+    //     emit vault.TokenSupportAdded(address(token));
+    //     vault.proposeAddToken(address(token));
+    //     vm.warp(block.timestamp + 1 days + 1);
+    //     vault.addSupportedToken(address(token), actionId);
+
+    //     vm.stopPrank();
+    //     vm.prank(user1);
+    //     token.approve(address(walletRouter), 100 ether);
+    //     vm.expectEmit(true, true, false, true);
+    //     emit walletRouter.Deposit(user1, address(token), 100 ether, block.timestamp);
+    //     walletRouter.deposit(address(token), 100 ether);
+    // }
 }

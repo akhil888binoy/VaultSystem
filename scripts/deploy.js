@@ -1,88 +1,89 @@
-
 const { ethers, upgrades } = require("hardhat");
 
 async function main() {
-  // Get deployer account
+  // Configuration: Replace with your Arbitrum multi-sig admin address (e.g., Gnosis Safe)
+  const MULTI_SIG_ADMIN = "0xYourMultiSigAdminAddressHere"; // Replace with actual address
+
+  // Get signers
   const [deployer] = await ethers.getSigners();
   console.log("Deploying contracts with account:", deployer.address);
-  console.log("Deployer balance:", (await deployer.getBalance()).toString());
 
   // Deploy RoleManager
   console.log("Deploying RoleManager...");
   const RoleManager = await ethers.getContractFactory("RoleManager");
-  const roleManager = await RoleManager.deploy(deployer.address);
+  const roleManager = await RoleManager.deploy(MULTI_SIG_ADMIN);
   await roleManager.deployed();
   console.log("RoleManager deployed to:", roleManager.address);
 
-  // Deploy WalletRouter
-  console.log("Deploying WalletRouter...");
-  const WalletRouter = await ethers.getContractFactory("WalletRouter");
-  const walletRouter = await WalletRouter.deploy(roleManager.address);
-  await walletRouter.deployed();
-  console.log("WalletRouter deployed to:", walletRouter.address);
+  // Deploy Timelock
+  console.log("Deploying Timelock...");
+  const Timelock = await ethers.getContractFactory("Timelock");
+  const timelock = await Timelock.deploy(roleManager.address);
+  await timelock.deployed();
+  console.log("Timelock deployed to:", timelock.address);
 
-  // Deploy Vault as an upgradeable proxy
-  console.log("Deploying Vault proxy...");
+  // Deploy Vault (UUPS proxy)
+  console.log("Deploying Vault (UUPS proxy)...");
   const Vault = await ethers.getContractFactory("Vault");
   const vault = await upgrades.deployProxy(
     Vault,
-    [roleManager.address, deployer.address, walletRouter.address],
+    [roleManager.address, ethers.constants.AddressZero, timelock.address],
     { initializer: "initialize", kind: "uups" }
   );
   await vault.deployed();
   console.log("Vault proxy deployed to:", vault.address);
+  console.log("Vault implementation deployed to:", await upgrades.erc1967.getImplementationAddress(vault.address));
 
-  // Grant roles
-  console.log("Configuring roles...");
-  const DEFAULT_ADMIN_ROLE = await roleManager.DEFAULT_ADMIN_ROLE();
-  const VAULT_ADMIN_ROLE = await roleManager.VAULT_ADMIN_ROLE();
-  const ROUTER_ADMIN_ROLE = await roleManager.ROUTER_ADMIN_ROLE();
-  const OPERATOR_ROLE = await roleManager.OPERATOR_ROLE();
+  // Deploy WalletRouter
+  console.log("Deploying WalletRouter...");
+  const WalletRouter = await ethers.getContractFactory("WalletRouter");
+  const walletRouter = await WalletRouter.deploy(roleManager.address, timelock.address);
+  await walletRouter.deployed();
+  console.log("WalletRouter deployed to:", walletRouter.address);
 
-  // Grant VAULT_ADMIN_ROLE to deployer
-  await roleManager.grantRole(VAULT_ADMIN_ROLE, deployer.address);
-  console.log("Granted VAULT_ADMIN_ROLE to:", deployer.address);
+  // Set WalletRouter in Vault (via timelock proposal)
+  console.log("Proposing to set WalletRouter in Vault...");
+  const vaultAdminRole = await roleManager.VAULT_ADMIN_ROLE();
+  await roleManager.connect(deployer).grantRole(vaultAdminRole, deployer.address); // Temporarily grant role for testing
+  const setWalletRouterKey = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("SET_WALLETROUTER"));
+  await vault.proposeSetWalletRouter(walletRouter.address);
+  console.log("Set WalletRouter proposed.");
 
-  // Grant ROUTER_ADMIN_ROLE to deployer
-  await roleManager.grantRole(ROUTER_ADMIN_ROLE, deployer.address);
-  console.log("Granted ROUTER_ADMIN_ROLE to:", deployer.address);
+  // Simulate timelock execution (in production, wait for MIN_TIMELOCK_DELAY)
+  console.log("Executing set WalletRouter in Vault...");
+  await ethers.provider.send("evm_increaseTime", [24 * 60 * 60 + 1]); // Increase time by 24 hours + 1 second
+  await ethers.provider.send("evm_mine", []);
+  const actionId = ethers.utils.keccak256(
+    ethers.utils.defaultAbiCoder.encode(
+      ["bytes32", "address", "uint256"],
+      [setWalletRouterKey, walletRouter.address, (await ethers.provider.getBlock("latest")).timestamp - (24 * 60 * 60)]
+    )
+  );
+  await vault.setWalletRouter(walletRouter.address, actionId);
+  console.log("WalletRouter set in Vault.");
 
-  // Grant OPERATOR_ROLE to an operator (use deployer for testing)
-  await roleManager.grantRole(OPERATOR_ROLE, deployer.address);
-  console.log("Granted OPERATOR_ROLE to:", deployer.address);
+  // Set Vault in WalletRouter (via timelock proposal)
+  console.log("Proposing to set Vault in WalletRouter...");
+  const routerAdminRole = await roleManager.ROUTER_ADMIN_ROLE();
+  await roleManager.connect(deployer).grantRole(routerAdminRole, deployer.address); // Temporarily grant role for testing
+  const setVaultKey = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("SET_VAULT"));
+  await walletRouter.proposeSetVault(vault.address);
+  console.log("Set Vault proposed.");
 
-  // Set Vault in WalletRouter
-  console.log("Setting Vault in WalletRouter...");
-  await walletRouter.setVault(vault.address);
-  console.log("Vault set in WalletRouter");
+  // Simulate timelock execution (in production, wait for MIN_TIMELOCK_DELAY)
+  console.log("Executing set Vault in WalletRouter...");
+  await ethers.provider.send("evm_increaseTime", [24 * 60 * 60 + 1]); // Increase time by 24 hours + 1 second
+  await ethers.provider.send("evm_mine", []);
+  const vaultActionId = ethers.utils.keccak256(
+    ethers.utils.defaultAbiCoder.encode(
+      ["bytes32", "address", "uint256"],
+      [setVaultKey, vault.address, (await ethers.provider.getBlock("latest")).timestamp - (24 * 60 * 60)]
+    )
+  );
+  await walletRouter.setVault(vault.address, vaultActionId);
+  console.log("Vault set in WalletRouter.");
 
-  // Add USDC as a supported token (use MockERC20 for testing, or real USDC address)
-  const USDC_ADDRESS = "0x75faf114eafb1BDbe6bF7B8c1E63FCaB97506b6D"; // Arbitrum Sepolia USDC
-  // For testing, deploy MockERC20
-  const MockERC20 = await ethers.getContractFactory("MockERC20");
-  const usdc = await MockERC20.deploy("USD Coin", "USDC", 6);
-  await usdc.deployed();
-  console.log("Mock USDC deployed to:", usdc.address);
-
-  console.log("Adding USDC as supported token...");
-  await vault.addSupportedToken(usdc.address); // Replace with USDC_ADDRESS for production
-  console.log("USDC added as supported token");
-
-  // Verify setup
-  console.log("Verifying setup...");
-  console.log("Vault supports ETH:", await vault.supportedTokens(ethers.constants.AddressZero));
-  console.log("Vault supports USDC:", await vault.supportedTokens(usdc.address));
-  console.log("WalletRouter vault:", await walletRouter.vault());
-  console.log("Deployer has VAULT_ADMIN_ROLE:", await roleManager.hasRole(VAULT_ADMIN_ROLE, deployer.address));
-  console.log("Deployer has ROUTER_ADMIN_ROLE:", await roleManager.hasRole(ROUTER_ADMIN_ROLE, deployer.address));
-  console.log("Deployer has OPERATOR_ROLE:", await roleManager.hasRole(OPERATOR_ROLE, deployer.address));
-
-  // Save deployment addresses for verification
-  console.log("\nDeployment addresses:");
-  console.log(`RoleManager: ${roleManager.address}`);
-  console.log(`WalletRouter: ${walletRouter.address}`);
-  console.log(`Vault Proxy: ${vault.address}`);
-  console.log(`Mock USDC: ${usdc.address}`);
+  console.log("Deployment completed!");
 }
 
 main()
