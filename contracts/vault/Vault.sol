@@ -137,12 +137,6 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
     /// @param amount The amount to deposit.
     /// @dev Only callable by WalletRouter. Reverts if paused, token is not supported, or incorrect ETH amount. Emits DepositProcessed event.
     function handleDeposit(address user, address token, uint256 amount) external payable onlyWalletRouter onlySupportedToken(token) whenNotPaused {
-        if (token == address(0)) {
-            require(msg.value == amount, "Incorrect ETH amount");
-        } else {
-            require(msg.value == 0, "ETH not allowed for ERC20 deposit");
-        }
-
         totalDeposits[token] += amount;
         emit DepositProcessed(user, token, amount);
     }
@@ -165,31 +159,24 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
         emit WithdrawalProcessed(recipient, token, amount);
     }
 
-    /// @notice Proposes adding a supported token via the timelock.
+
+    /// @notice Executes the addition of a supported token after timelock validation.
     /// @param token The token address to add.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if token is already supported or invalid.
-    function proposeAddToken(address token) external onlyVaultAdmin {
+    /// @dev Only callable by VAULT_ADMIN_ROLE. Emits TokenSupportAdded event.
+    function addSupportedToken(address token) external onlyVaultAdmin {
         require(!supportedTokens[token], "Token already supported");
         if (token != address(0)) {
             require(isContract(token), "Token is not a contract");
         }
-        timelock.proposeAddToken(token, ADD_TOKEN, msg.sender);
-    }
-
-    /// @notice Executes the addition of a supported token after timelock validation.
-    /// @param token The token address to add.
-    /// @param actionId The identifier of the proposed action.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Emits TokenSupportAdded event.
-    function addSupportedToken(address token, bytes32 actionId) external onlyVaultAdmin {
-        require(timelock.executeAddToken(actionId, token, msg.sender), "Add token not executed");
         supportedTokens[token] = true;
         emit TokenSupportAdded(token);
     }
 
-    /// @notice Proposes removing a supported token via the timelock.
+
+    /// @notice Executes the removal of a supported token after timelock validation.
     /// @param token The token address to remove.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if token is not supported, has deposits, or has balance.
-    function proposeRemoveToken(address token) external onlyVaultAdmin {
+    /// @dev Only callable by VAULT_ADMIN_ROLE. Emits TokenSupportRemoved event.
+    function removeSupportedToken(address token) external onlyVaultAdmin {
         require(supportedTokens[token], "Token not supported");
         require(totalDeposits[token] == 0, "Cannot remove token with deposits");
         if (token == address(0)) {
@@ -197,15 +184,6 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
         } else {
             require(IERC20Upgradeable(token).balanceOf(address(this)) == 0, "Vault has token balance");
         }
-        timelock.proposeRemoveToken(token, REMOVE_TOKEN, msg.sender);
-    }
-
-    /// @notice Executes the removal of a supported token after timelock validation.
-    /// @param token The token address to remove.
-    /// @param actionId The identifier of the proposed action.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Emits TokenSupportRemoved event.
-    function removeSupportedToken(address token, bytes32 actionId) external onlyVaultAdmin {
-        require(timelock.executeRemoveToken(actionId, token, msg.sender), "Remove token not executed");
         supportedTokens[token] = false;
         emit TokenSupportRemoved(token);
     }
@@ -284,4 +262,6 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
         assembly { size := extcodesize(addr) }
         return size > 0;
     }
+
+    receive() external payable {}
 }

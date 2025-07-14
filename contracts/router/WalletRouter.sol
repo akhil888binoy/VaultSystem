@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
 import "../interface/IVault.sol";
 import "../interface/IRoleManager.sol";
 import "../interface/ITimelock.sol";
@@ -14,6 +15,7 @@ import "../interface/ITimelock.sol";
 /// @dev Inherits ReentrancyGuard for protection against reentrancy attacks and Pausable for emergency stops.
 contract WalletRouter is ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
+    using Address for address payable;
 
     /// @notice Address of the RoleManager contract for access control.
     IRoleManager public roleManager;
@@ -70,20 +72,11 @@ contract WalletRouter is ReentrancyGuard, Pausable {
         _;
     }
 
-    /// @notice Proposes setting a new vault address via the timelock.
-    /// @param _vault The proposed new vault address.
-    /// @dev Only callable by ROUTER_ADMIN_ROLE. Reverts if the vault address is zero.
-    function proposeSetVault(address _vault) external onlyRouterAdmin {
-        require(_vault != address(0), "Invalid vault address");
-        timelock.proposeSetVault(SET_VAULT, _vault, msg.sender);
-    }
-
     /// @notice Executes the setting of a new vault address after timelock validation.
     /// @param _vault The new vault address to set.
-    /// @param actionId The identifier of the proposed action.
     /// @dev Only callable by ROUTER_ADMIN_ROLE. Emits VaultSet event on success.
-    function setVault(address _vault, bytes32 actionId) external onlyRouterAdmin {
-        require(timelock.executeSetVault(actionId, _vault, msg.sender), "Cannot execute setVault");
+    function setVault(address _vault) external onlyRouterAdmin {
+        require(_vault != address(0), "Invalid vault address");
         vault = IVault(_vault);
         emit VaultSet(_vault);
     }
@@ -110,8 +103,8 @@ contract WalletRouter is ReentrancyGuard, Pausable {
         require(vault.isSupportedToken(token), "Token not supported");
 
         if (token == address(0)) {
-            require(msg.value == amount, "Incorrect ETH amount");
-            vault.handleDeposit{value: amount}(msg.sender, token, amount);
+            payable(address(vault)).sendValue(amount); // Send ETH to Vault
+            vault.handleDeposit(msg.sender, token, amount); // Record deposit
         } else {
             uint256 balanceBefore = IERC20(token).balanceOf(address(vault));
             IERC20(token).safeTransferFrom(msg.sender, address(vault), amount);
@@ -136,3 +129,5 @@ contract WalletRouter is ReentrancyGuard, Pausable {
         emit Withdrawal(recipient, token, amount, block.timestamp);
     }
 }
+
+

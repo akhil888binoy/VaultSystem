@@ -76,7 +76,7 @@ contract Timelock {
     /// @param _roleManager Address of the RoleManager contract.
     /// @dev Reverts if the RoleManager address is invalid.
     constructor(address _roleManager) {
-        require(_roleManager != address(0), "Invalid WalletRouter");
+        require(_roleManager != address(0), "Invalid RoleManager");
         roleManager = IRoleManager(_roleManager);
     }
 
@@ -96,103 +96,6 @@ contract Timelock {
         _;
     }
 
-    /// @notice Proposes setting a new vault address for the WalletRouter.
-    /// @param key The action identifier.
-    /// @param _newvault The proposed new vault address.
-    /// @param caller The address proposing the action.
-    /// @dev Only callable by ROUTER_ADMIN_ROLE. Reverts if action is already proposed. Emits SetVaultPropose event.
-    function proposeSetVault(bytes32 key, address _newvault, address caller) external onlyRouterAdmin(caller) {
-        bytes32 actionId = keccak256(abi.encode(key, _newvault, block.timestamp));
-        require(pendingWalletRouter[actionId].executableAfter == 0, "Action already proposed");
-
-        pendingWalletRouter[actionId] = PendingWalletRouter({
-            key: key,
-            newvault: _newvault,
-            executableAfter: block.timestamp + MIN_TIMELOCK_DELAY
-        });
-        emit SetVaultPropose(actionId, _newvault, block.timestamp + MIN_TIMELOCK_DELAY);
-    }
-
-    /// @notice Executes the setting of a new vault address after timelock validation.
-    /// @param actionId The identifier of the proposed action.
-    /// @param _vault The new vault address.
-    /// @param caller The address executing the action.
-    /// @return True if the execution is successful.
-    /// @dev Only callable by ROUTER_ADMIN_ROLE. Reverts if action is not proposed, timelock is not expired, or vault is mismatched.
-    function executeSetVault(bytes32 actionId, address _vault, address caller) external onlyRouterAdmin(caller) returns (bool) {
-        PendingWalletRouter memory action = pendingWalletRouter[actionId];
-        require(action.executableAfter != 0, "Action not proposed");
-        require(block.timestamp >= action.executableAfter, "Timelock not expired");
-        require(action.newvault == _vault, "New Vault is mismatched");
-        delete pendingWalletRouter[actionId];
-        return true;
-    }
-
-    /// @notice Proposes adding a supported token to the Vault.
-    /// @param token The token address to add.
-    /// @param key The action identifier.
-    /// @param caller The address proposing the action.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if action is already proposed. Emits AddTokenPropose event.
-    function proposeAddToken(address token, bytes32 key, address caller) external onlyVaultAdmin(caller) {
-        bytes32 actionId = keccak256(abi.encode(key, token, block.timestamp));
-        require(pendingVault[actionId].executableAfter == 0, "Action already proposed");
-
-        pendingVault[actionId] = PendingVault({
-            key: key,
-            target: token,
-            executableAfter: block.timestamp + MIN_TIMELOCK_DELAY
-        });
-        emit AddTokenPropose(actionId, token, block.timestamp + MIN_TIMELOCK_DELAY);
-    }
-
-    /// @notice Executes the addition of a supported token after timelock validation.
-    /// @param actionId The identifier of the proposed action.
-    /// @param token The token address to add.
-    /// @param caller The address executing the action.
-    /// @return True if the execution is successful.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if action is not proposed, timelock is not expired, or token is mismatched.
-    function executeAddToken(bytes32 actionId, address token, address caller) external onlyVaultAdmin(caller) returns (bool) {
-        PendingVault memory action = pendingVault[actionId];
-        require(action.executableAfter != 0, "Action not proposed");
-        require(block.timestamp >= action.executableAfter, "Timelock not expired");
-        require(action.key == keccak256("ADD_TOKEN"), "Invalid key");
-        require(action.target == token, "Token mismatch");
-        delete pendingVault[actionId];
-        return true;
-    }
-
-    /// @notice Proposes removing a supported token from the Vault.
-    /// @param token The token address to remove.
-    /// @param key The action identifier.
-    /// @param caller The address proposing the action.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if action is already proposed. Emits RemoveTokenPropose event.
-    function proposeRemoveToken(address token, bytes32 key, address caller) external onlyVaultAdmin(caller) {
-        bytes32 actionId = keccak256(abi.encode(key, token, block.timestamp));
-        require(pendingVault[actionId].executableAfter == 0, "Action already proposed");
-
-        pendingVault[actionId] = PendingVault({
-            key: key,
-            target: token,
-            executableAfter: block.timestamp + MIN_TIMELOCK_DELAY
-        });
-        emit RemoveTokenPropose(actionId, token, block.timestamp + MIN_TIMELOCK_DELAY);
-    }
-
-    /// @notice Executes the removal of a supported token after timelock validation.
-    /// @param actionId The identifier of the proposed action.
-    /// @param token The token address to remove.
-    /// @param caller The address executing the action.
-    /// @return True if the execution is successful.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if action is not proposed, timelock is not expired, or token is mismatched.
-    function executeRemoveToken(bytes32 actionId, address token, address caller) external onlyVaultAdmin(caller) returns (bool) {
-        PendingVault memory action = pendingVault[actionId];
-        require(action.executableAfter != 0, "Action not proposed");
-        require(block.timestamp >= action.executableAfter, "Timelock not expired");
-        require(action.key == keccak256("REMOVE_TOKEN"), "Invalid key");
-        require(action.target == token, "Token mismatch");
-        delete pendingVault[actionId];
-        return true;
-    }
 
     /// @notice Proposes setting a new WalletRouter address for the Vault.
     /// @param _walletAddress The proposed new WalletRouter address.

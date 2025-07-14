@@ -66,24 +66,24 @@ contract VaultSystemTest is Test {
             address(timelock)
         );
         ERC1967Proxy proxy = new ERC1967Proxy(vaultImpl, initData);
-        vault = Vault(address(proxy));
+        vault = Vault (payable(address(proxy)));
 
-        // Update Timelock with correct addresses
-        bytes32 actionId = keccak256(abi.encode(SET_VAULT, address(vault), block.timestamp));
-        timelock.proposeSetVault(SET_VAULT, address(vault), multiSigAdmin);
-        vm.warp(block.timestamp + 1 days + 1);
-        timelock.executeSetVault(actionId, address(vault), multiSigAdmin);
+        // // Update Timelock with correct addresses
+        // bytes32 actionId = keccak256(abi.encode(SET_VAULT, address(vault), block.timestamp));
+        // timelock.proposeSetVault(SET_VAULT, address(vault), multiSigAdmin);
+        // vm.warp(block.timestamp + 1 days + 1);
+        // timelock.executeSetVault(actionId, address(vault), multiSigAdmin);
 
-        actionId = keccak256(abi.encode(SET_WALLETROUTER, address(walletRouter), block.timestamp));
-        timelock.proposeSetWalletRouter(address(walletRouter), SET_WALLETROUTER , multiSigAdmin);
-        vm.warp(block.timestamp + 1 days + 1);
-        timelock.executeSetWalletRouter(actionId, address(walletRouter) , multiSigAdmin);
+        // actionId = keccak256(abi.encode(SET_WALLETROUTER, address(walletRouter), block.timestamp));
+        // timelock.proposeSetWalletRouter(address(walletRouter), SET_WALLETROUTER , multiSigAdmin);
+        // vm.warp(block.timestamp + 1 days + 1);
+        // timelock.executeSetWalletRouter(actionId, address(walletRouter) , multiSigAdmin);
 
         // Set Vault in WalletRouter
-        actionId = keccak256(abi.encode(SET_VAULT, address(vault), block.timestamp));
-        walletRouter.proposeSetVault(address(vault));
-        vm.warp(block.timestamp + 1 days + 1);
-        walletRouter.setVault(address(vault), actionId);
+        // actionId = keccak256(abi.encode(SET_VAULT, address(vault), block.timestamp));
+        // walletRouter.proposeSetVault(address(vault));
+        // vm.warp(block.timestamp + 1 days + 1);
+        walletRouter.setVault(address(vault));
 
         // Deploy and initialize Mock ERC20 token
         token = new MockERC20();
@@ -96,7 +96,7 @@ contract VaultSystemTest is Test {
         vm.deal(user2, 100 ether);
 
         // Grant roles
-        actionId = keccak256(abi.encode(OPERATOR_ROLE, operator, true, block.timestamp));
+       bytes32 actionId = keccak256(abi.encode(OPERATOR_ROLE, operator, true, block.timestamp));
         roleManager.proposeGrantRole(OPERATOR_ROLE, operator);
         vm.warp(block.timestamp + 1 days + 1);
         roleManager.executeRoleAction(actionId);
@@ -125,11 +125,12 @@ contract VaultSystemTest is Test {
     }
 
     function testAddRemoveSupportedToken() public {
+
         vm.startPrank(multiSigAdmin);
-        bytes32 actionId = keccak256(abi.encode(ADD_TOKEN, address(token), block.timestamp));
-        vault.proposeAddToken(address(token));
-        vm.warp(block.timestamp + 1 days + 1);
-        vault.addSupportedToken(address(token), actionId);
+        // bytes32 actionId = keccak256(abi.encode(ADD_TOKEN, address(token), block.timestamp));
+        // vault.proposeAddToken(address(token));
+        // vm.warp(block.timestamp + 1 days + 1);
+        vault.addSupportedToken(address(token));
         assertTrue(vault.isSupportedToken(address(token)));
 
         // Deposit to prevent removal
@@ -141,17 +142,13 @@ contract VaultSystemTest is Test {
 
         vm.prank(multiSigAdmin);
         vm.expectRevert("Cannot remove token with deposits");
-        vault.proposeRemoveToken(address(token));
+        vault.removeSupportedToken(address(token));
 
         // Withdraw and remove
         vm.prank(multiSigAdmin);
-        walletRouter.withdraw(user1, address(token), 100 ether);
+        walletRouter.withdraw(user1, address(token), 100 ether);        
         vm.prank(multiSigAdmin);
-        actionId = keccak256(abi.encode(REMOVE_TOKEN, address(token), block.timestamp));
-        vault.proposeRemoveToken(address(token));
-        vm.warp(block.timestamp + 1 days + 1);
-        vm.prank(multiSigAdmin);
-        vault.removeSupportedToken(address(token), actionId);
+        vault.removeSupportedToken(address(token));
         assertFalse(vault.isSupportedToken(address(token)));
     }
 
@@ -170,10 +167,10 @@ contract VaultSystemTest is Test {
 
     function testERC20DepositAndWithdrawal() public {
         vm.startPrank(multiSigAdmin);
-        bytes32 actionId = keccak256(abi.encode(ADD_TOKEN, address(token), block.timestamp));
-        vault.proposeAddToken(address(token));
-        vm.warp(block.timestamp + 1 days + 1);
-        vault.addSupportedToken(address(token), actionId);
+        // bytes32 actionId = keccak256(abi.encode(ADD_TOKEN, address(token), block.timestamp));
+        // vault.proposeAddToken(address(token));
+        // vm.warp(block.timestamp + 1 days + 1);
+        vault.addSupportedToken(address(token));
         vm.stopPrank();
 
         vm.prank(user1);
@@ -208,7 +205,7 @@ contract VaultSystemTest is Test {
     function testVaultAccessControl() public {
         vm.prank(user1);
         vm.expectRevert("Caller lacks VAULT_ADMIN_ROLE");
-        vault.proposeAddToken(address(token));
+        vault.addSupportedToken(address(token));
 
         vm.prank(user1);
         vm.expectRevert("Not WalletRouter");
