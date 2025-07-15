@@ -43,6 +43,10 @@ contract Timelock {
     );
 
 
+    /// @notice Emitted when the timelock delay period is changed
+    /// @param oldDelay The previous delay duration in seconds
+    /// @param newDelay The new delay duration in seconds
+    /// @dev This event provides transparency about timelock parameter changes
     event TimelockDelayChanged(uint256 oldDelay, uint256 newDelay);
 
 
