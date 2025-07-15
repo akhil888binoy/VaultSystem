@@ -87,7 +87,6 @@ contract RoleManager is AccessControl, Pausable {
     /// @dev This event provides transparency about timelock parameter changes
     event TimelockDelayChanged(uint256 oldDelay, uint256 newDelay);
 
-    event TimelockDelayChanged(uint256 oldDelay, uint256 newDelay);
 
 
     /// @notice Initializes the contract with a multi-sig admin.
