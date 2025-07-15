@@ -18,7 +18,7 @@ contract RoleManager is AccessControl, Pausable {
     bytes32 public constant ROUTER_ADMIN_ROLE = keccak256("ROUTER_ADMIN_ROLE");
 
     /// @notice Minimum timelock delay for role changes (24 hours).
-    uint256 public constant MIN_TIMELOCK_DELAY = 1 days;
+    uint256 public  MIN_TIMELOCK_DELAY = 1 days;
 
     /// @notice Struct to store pending role actions.
     struct PendingRoleAction {
@@ -80,6 +80,10 @@ contract RoleManager is AccessControl, Pausable {
     /// @param oldAdmin The previous admin.
     /// @param newAdmin The new admin.
     event AdminTransferAccepted(address indexed oldAdmin, address indexed newAdmin);
+
+
+    event TimelockDelayChanged(uint256 oldDelay, uint256 newDelay);
+
 
     /// @notice Initializes the contract with a multi-sig admin.
     /// @param _multiSigAdmin Address of the multi-signature wallet to be granted admin roles.
@@ -185,6 +189,16 @@ contract RoleManager is AccessControl, Pausable {
         _revokeRole(DEFAULT_ADMIN_ROLE, transfer.oldAdmin);
         emit AdminTransferAccepted(transfer.oldAdmin, msg.sender);
         delete pendingAdminTransfers[msg.sender];
+    }
+
+    /// @notice Sets the timelock delay period
+    /// @param role The role to setTimelock.
+    /// @param daysCount Number of days for the delay (will be converted to seconds)
+    function setTimelock( bytes32 role , uint256 daysCount ) external onlyRole(getRoleAdmin(role)){
+            require(daysCount > 0, "Delay must be at least 1 day");
+            uint256 newDelay = daysCount * 1 days;
+            emit TimelockDelayChanged(MIN_TIMELOCK_DELAY, newDelay);
+            MIN_TIMELOCK_DELAY = newDelay;
     }
 
     /// @notice Overrides renounceRole to disable direct calls.

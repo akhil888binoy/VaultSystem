@@ -22,24 +22,6 @@ contract Timelock {
         uint256 executableAfter; // Timestamp when action can be executed
     }
 
-    /// @notice Emitted when a new vault address is proposed.
-    /// @param actionId The identifier of the proposed action.
-    /// @param newvault The proposed new vault address.
-    /// @param executableAfter Timestamp when the action can be executed.
-    event SetVaultPropose(bytes32 indexed actionId, address indexed newvault, uint256 executableAfter);
-
-    /// @notice Emitted when a token addition is proposed.
-    /// @param actionId The identifier of the proposed action.
-    /// @param token The token address to add.
-    /// @param executableAfter Timestamp when the action can be executed.
-    event AddTokenPropose(bytes32 indexed actionId, address indexed token, uint256 executableAfter);
-
-    /// @notice Emitted when a token removal is proposed.
-    /// @param actionId The identifier of the proposed action.
-    /// @param token The token address to remove.
-    /// @param executableAfter Timestamp when the action can be executed.
-    event RemoveTokenPropose(bytes32 indexed actionId, address indexed token, uint256 executableAfter);
-
     /// @notice Emitted when a new WalletRouter address is proposed.
     /// @param actionId The identifier of the proposed action.
     /// @param walletRouter The proposed new WalletRouter address.
@@ -60,6 +42,10 @@ contract Timelock {
         uint256 executableAfter
     );
 
+
+    event TimelockDelayChanged(uint256 oldDelay, uint256 newDelay);
+
+
     /// @notice Mapping of action ID to pending WalletRouter action.
     mapping(bytes32 => PendingWalletRouter) public pendingWalletRouter;
 
@@ -67,7 +53,7 @@ contract Timelock {
     mapping(bytes32 => PendingVault) public pendingVault;
 
     /// @notice Minimum timelock delay for changes (24 hours).
-    uint256 public constant MIN_TIMELOCK_DELAY = 1 days;
+    uint256 public  MIN_TIMELOCK_DELAY = 1 days;
 
     /// @notice Address of the RoleManager contract for access control.
     IRoleManager public roleManager;
@@ -161,5 +147,14 @@ contract Timelock {
         require(action.target == token, "Token mismatch");
         delete pendingVault[actionId];
         return true;
+    }
+
+    /// @notice Sets the timelock delay period
+    /// @param daysCount Number of days for the delay (will be converted to seconds)
+    function setTimelock(uint256 daysCount ) external onlyVaultAdmin(msg.sender){
+        require(daysCount > 0, "Delay must be at least 1 day");
+         uint256 newDelay = daysCount * 1 days;
+        emit TimelockDelayChanged(MIN_TIMELOCK_DELAY, newDelay);
+        MIN_TIMELOCK_DELAY = newDelay;
     }
 }
