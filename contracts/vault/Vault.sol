@@ -77,7 +77,7 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
     /// @notice Constructor to disable initialization of the implementation contract.
     /// @dev Prevents the implementation from being initialized directly.
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() initializer {}
+    constructor()  { _disableInitializers(); }
 
     /// @notice Initializes the vault with RoleManager, WalletRouter, and Timelock addresses.
     /// @param _roleManager Address of the RoleManager contract.
@@ -136,7 +136,7 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
     /// @param token The token address (address(0) for ETH).
     /// @param amount The amount to deposit.
     /// @dev Only callable by WalletRouter. Reverts if paused, token is not supported, or incorrect ETH amount. Emits DepositProcessed event.
-    function handleDeposit(address user, address token, uint256 amount) external payable onlyWalletRouter onlySupportedToken(token) whenNotPaused {
+    function handleDeposit(address user, address token, uint256 amount) external  payable onlyWalletRouter onlySupportedToken(token) whenNotPaused {
         totalDeposits[token] += amount;
         emit DepositProcessed(user, token, amount);
     }
@@ -146,7 +146,7 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
     /// @param token The token address (address(0) for ETH).
     /// @param amount The amount to withdraw.
     /// @dev Only callable by WalletRouter. Reverts if paused, token is not supported, or insufficient balance. Emits WithdrawalProcessed event.
-    function handleWithdrawal(address recipient, address token, uint256 amount) external onlyWalletRouter onlySupportedToken(token) whenNotPaused {
+    function handleWithdrawal(address recipient, address token, uint256 amount) external  onlyWalletRouter onlySupportedToken(token) whenNotPaused {
         require(totalDeposits[token] >= amount, "Insufficient tracked deposits");
         if (token == address(0)) {
             require(address(this).balance >= amount, "Insufficient Vault ETH balance");
@@ -249,7 +249,7 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
     /// @notice Authorizes a contract upgrade.
     /// @param newImplementation The new implementation address.
     /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if address is invalid or not a contract.
-    function _authorizeUpgrade(address newImplementation) internal onlyVaultAdmin override {
+    function _authorizeUpgrade(address newImplementation) internal  onlyVaultAdmin override {
         require(newImplementation != address(0), "Invalid implementation address");
         require(isContract(newImplementation), "Implementation is not a contract");
     }

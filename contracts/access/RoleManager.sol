@@ -240,4 +240,5 @@ contract RoleManager is AccessControl, Pausable {
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
+    
 }

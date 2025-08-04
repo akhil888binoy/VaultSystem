@@ -2,11 +2,13 @@
 pragma solidity ^0.8.0;
 
 import "forge-std/Script.sol";
+import "forge-std/console.sol";  
 import "../contracts/access/RoleManager.sol";
 import "../contracts/timelock/Timelock.sol";
 import "../contracts/vault/Vault.sol";
 import "../contracts/router/WalletRouter.sol";
-// import "../contracts/TestToken/TestToken.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+
 
 contract DeployScript is Script {
     function setUp() public {}
@@ -66,9 +68,9 @@ contract DeployScript is Script {
             address(walletRouter),
             address(timelock)
         );
-        address proxyAdmin = multiSigAdmin;
-        address  vaultProxy = deployUUPSProxy(address(vaultImplementation), proxyAdmin, initData);
-        console.log("Vault proxy deployed at:", vaultProxy);
+        
+        ERC1967Proxy  vaultProxy = new ERC1967Proxy(address(vaultImplementation), initData);
+        console.log("Vault proxy deployed at:", address(vaultProxy));
         Vault vault = Vault(payable(vaultProxy));
 
         walletRouter.setVault(address(vault));
@@ -83,25 +85,5 @@ contract DeployScript is Script {
 
         // Stop broadcasting transactions
         vm.stopBroadcast();
-    }
-
-    // Helper function to deploy UUPS proxy
-    function deployUUPSProxy(address implementation, address admin, bytes memory initData) internal returns (address) {
-        bytes memory proxyCode = abi.encodePacked(
-            hex"3d602d80600a3d3981f3363d3d373d3d3d363d73",
-            implementation,
-            hex"5af43d82803e903d91602b57fd5bf3"
-        );
-        address proxy;
-        assembly {
-            proxy := create(0, add(proxyCode, 0x20), mload(proxyCode))
-        }
-        require(proxy != address(0), "Proxy deployment failed");
-
-        // Initialize the proxy
-        (bool success,) = proxy.call(initData);
-        require(success, "Proxy initialization failed");
-
-        return proxy;
     }
 }
