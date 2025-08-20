@@ -75,6 +75,8 @@ contract DeployScript is Script {
 
         walletRouter.setVault(address(vault));
         console.log("Vault set in WalletRouter");
+        timelock.setVault(address(vault));
+        console.log("Vault set in Timelock");
 
         // Verify initial setup
         console.log("Verifying setup...");

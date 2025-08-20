@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/utils/Address.sol";
 import "../interface/IVault.sol";
 import "../interface/IRoleManager.sol";
 import "../interface/ITimelock.sol";
+import "../error/Error.sol";
 
 /// @title WalletRouter
 /// @notice Routes deposits and withdrawals to a vault with role-based access, pausability, and enhanced event tracking.
@@ -52,8 +53,8 @@ contract WalletRouter is ReentrancyGuard, Pausable {
     /// @param _timelock Address of the Timelock contract.
     /// @dev Reverts if either address is zero.
     constructor(address _roleManager, address _timelock) {
-        require(_roleManager != address(0), "Invalid RoleManager");
-        require(_timelock != address(0), "Invalid Timelock");
+        if(_roleManager == address(0)) revert Error.InvalidRoleManager();
+        if (_timelock == address(0)) revert Error.InvalidTimelock();
         roleManager = IRoleManager(_roleManager);
         timelock = ITimelock(_timelock);
     }
@@ -61,22 +62,26 @@ contract WalletRouter is ReentrancyGuard, Pausable {
     /// @notice Restricts function access to accounts with the OPERATOR_ROLE.
     /// @dev Reverts if the caller does not have the OPERATOR_ROLE.
     modifier onlyOperator() {
-        require(roleManager.hasRole(roleManager.OPERATOR_ROLE(), msg.sender), "Not operator");
+        if (!roleManager.hasRole(roleManager.OPERATOR_ROLE(), msg.sender)) 
+            revert Error.NotOperator();
         _;
     }
+    
 
     /// @notice Restricts function access to accounts with the ROUTER_ADMIN_ROLE.
     /// @dev Reverts if the caller does not have the ROUTER_ADMIN_ROLE.
     modifier onlyRouterAdmin() {
-        require(roleManager.hasRole(roleManager.ROUTER_ADMIN_ROLE(), msg.sender), "Not router admin");
+        if (!roleManager.hasRole(roleManager.ROUTER_ADMIN_ROLE(), msg.sender)) 
+            revert Error.NotRouterAdmin();
         _;
     }
 
-    /// @notice Executes the setting of a new vault address after timelock validation.
+
+    /// @notice Executes the setting of a new vault address.
     /// @param _vault The new vault address to set.
     /// @dev Only callable by ROUTER_ADMIN_ROLE. Emits VaultSet event on success.
-    function setVault(address _vault) external onlyRouterAdmin {
-        require(_vault != address(0), "Invalid vault address");
+    function setVault(address _vault) external onlyRouterAdmin whenNotPaused {
+        if (_vault == address(0)) revert Error.InvalidVaultAddress();
         vault = IVault(_vault);
         emit VaultSet(_vault);
     }
@@ -98,22 +103,25 @@ contract WalletRouter is ReentrancyGuard, Pausable {
     /// @param amount The amount to deposit.
     /// @dev Reverts if paused, amount is zero, vault is not set, or token is not supported. Emits Deposit event.
     function deposit(address token, uint256 amount) external payable nonReentrant whenNotPaused {
-        require(amount > 0, "Invalid amount");
-        require(address(vault) != address(0), "Vault not set");
-        require(vault.isSupportedToken(token), "Token not supported");
+        if (amount == 0) revert Error.InvalidAmount();
+        if (address(vault) == address(0)) revert  Error.VaultNotSet();
+        if (!vault.isSupportedToken(token)) revert Error.TokenNotSupported();
 
         if (token == address(0)) {
+            if (msg.value != amount) revert Error.ETHAmountMismatch();
             payable(address(vault)).sendValue(amount); // Send ETH to Vault
             vault.handleDeposit(msg.sender, token, amount); // Record deposit
+            emit Deposit(msg.sender, token, msg.value, block.timestamp);
         } else {
+            if (msg.value != 0) revert  Error.ETHSentWithTokenTransfer();
             uint256 balanceBefore = IERC20(token).balanceOf(address(vault));
             IERC20(token).safeTransferFrom(msg.sender, address(vault), amount);
             uint256 balanceAfter = IERC20(token).balanceOf(address(vault));
             uint256 receivedAmount = balanceAfter - balanceBefore;
-            require(receivedAmount >= amount, "Token transfer failed");
+            if (receivedAmount == 0) revert Error.TokenTransferFailed();
             vault.handleDeposit(msg.sender, token, receivedAmount);
+            emit Deposit(msg.sender, token, receivedAmount, block.timestamp);
         }
-        emit Deposit(msg.sender, token, amount, block.timestamp);
     }
 
     /// @notice Withdraws tokens or ETH from the vault.
@@ -122,9 +130,9 @@ contract WalletRouter is ReentrancyGuard, Pausable {
     /// @param amount The amount to withdraw.
     /// @dev Only callable by OPERATOR_ROLE. Reverts if paused, amount is zero, vault is not set, or token is not supported. Emits Withdrawal event.
     function withdraw(address recipient, address token, uint256 amount) external nonReentrant onlyOperator whenNotPaused {
-        require(amount > 0, "Invalid amount");
-        require(address(vault) != address(0), "Vault not set");
-        require(vault.isSupportedToken(token), "Token not supported");
+        if (amount == 0)  revert Error.InvalidAmount();
+        if (address(vault) == address(0)) revert  Error.VaultNotSet();
+        if (!vault.isSupportedToken(token)) revert  Error.TokenNotSupported();
         vault.handleWithdrawal(recipient, token, amount);
         emit Withdrawal(recipient, token, amount, block.timestamp);
     }

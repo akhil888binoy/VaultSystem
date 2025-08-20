@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
-
+import "../error/Error.sol";
 /// @title RoleManager
 /// @notice Manages roles with timelocked role changes and admin transfer, intended for use with a multi-sig admin.
 /// @dev Inherits AccessControl for role management and Pausable for emergency stops.
@@ -93,7 +93,7 @@ contract RoleManager is AccessControl, Pausable {
     /// @param _multiSigAdmin Address of the multi-signature wallet to be granted admin roles.
     /// @dev Grants DEFAULT_ADMIN_ROLE, OPERATOR_ROLE, VAULT_ADMIN_ROLE, and ROUTER_ADMIN_ROLE to the admin.
     constructor(address _multiSigAdmin) {
-        require(_multiSigAdmin != address(0), "Invalid admin address");
+        if (_multiSigAdmin == address(0)) revert Error.InvalidAdminAddress();
         _grantRole(DEFAULT_ADMIN_ROLE, _multiSigAdmin);
         _setRoleAdmin(OPERATOR_ROLE, DEFAULT_ADMIN_ROLE);
         _setRoleAdmin(VAULT_ADMIN_ROLE, DEFAULT_ADMIN_ROLE);
@@ -109,9 +109,9 @@ contract RoleManager is AccessControl, Pausable {
     /// @param account The account to receive the role.
     /// @dev Only callable by the role admin. Reverts if paused, account is invalid, or action is already proposed. Emits RoleChangeProposed event.
     function proposeGrantRole(bytes32 role, address account) external onlyRole(getRoleAdmin(role)) whenNotPaused {
-        require(account != address(0), "Invalid account");
+        if (account == address(0)) revert  Error.InvalidAccount();
         bytes32 actionId = keccak256(abi.encode(role, account, true, block.timestamp));
-        require(pendingRoleActions[actionId].executableAfter == 0, "Action already proposed");
+        if (pendingRoleActions[actionId].executableAfter != 0) revert Error.ActionAlreadyProposed();
 
         pendingRoleActions[actionId] = PendingRoleAction({
             role: role,
@@ -128,9 +128,9 @@ contract RoleManager is AccessControl, Pausable {
     /// @param account The account to lose the role.
     /// @dev Only callable by the role admin. Reverts if paused, account is invalid, or action is already proposed. Emits RoleChangeProposed event.
     function proposeRevokeRole(bytes32 role, address account) external onlyRole(getRoleAdmin(role)) whenNotPaused {
-        require(account != address(0), "Invalid account");
+        if (account == address(0)) revert  Error.InvalidAccount();
         bytes32 actionId = keccak256(abi.encode(role, account, false, block.timestamp));
-        require(pendingRoleActions[actionId].executableAfter == 0, "Action already proposed");
+        if (pendingRoleActions[actionId].executableAfter != 0) revert Error.ActionAlreadyProposed();
 
         pendingRoleActions[actionId] = PendingRoleAction({
             role: role,
@@ -146,25 +146,26 @@ contract RoleManager is AccessControl, Pausable {
     /// @param actionId The identifier of the proposed action.
     /// @dev Only callable by DEFAULT_ADMIN_ROLE. Reverts if action is not proposed or timelock is not expired. Emits RoleChangeExecuted event.
     function executeRoleAction(bytes32 actionId) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        PendingRoleAction memory action = pendingRoleActions[actionId];
-        require(action.executableAfter != 0, "Action not proposed");
-        require(block.timestamp >= action.executableAfter, "Timelock not expired");
+            PendingRoleAction memory action = pendingRoleActions[actionId];
+            if (action.executableAfter == 0) revert Error.ActionNotProposed();
+            if (block.timestamp < action.executableAfter) revert  Error.TimelockNotExpired();
 
-        if (action.isGrant) {
-            _grantRole(action.role, action.account);
-        } else {
-            _revokeRole(action.role, action.account);
-        }
+            delete pendingRoleActions[actionId];  
 
-        emit RoleChangeExecuted(actionId, action.role, action.account, action.isGrant);
-        delete pendingRoleActions[actionId];
+            if (action.isGrant) {
+                _grantRole(action.role, action.account);
+            } else {
+                _revokeRole(action.role, action.account);
+            }
+
+            emit RoleChangeExecuted(actionId, action.role, action.account, action.isGrant);
     }
 
     /// @notice Cancels a proposed role action.
     /// @param actionId The identifier of the proposed action.
     /// @dev Only callable by DEFAULT_ADMIN_ROLE. Reverts if action is not proposed. Emits RoleChangeCancelled event.
     function cancelRoleAction(bytes32 actionId) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(pendingRoleActions[actionId].executableAfter != 0, "Action not proposed");
+        if (pendingRoleActions[actionId].executableAfter == 0) revert Error.ActionNotProposed();
         delete pendingRoleActions[actionId];
         emit RoleChangeCancelled(actionId);
     }
@@ -173,7 +174,7 @@ contract RoleManager is AccessControl, Pausable {
     /// @param newAdmin The address to receive the admin role.
     /// @dev Only callable by DEFAULT_ADMIN_ROLE. Reverts if paused or newAdmin is invalid. Emits AdminTransferProposed event.
     function proposeAdminTransfer(address newAdmin) external onlyRole(DEFAULT_ADMIN_ROLE) whenNotPaused {
-        require(newAdmin != address(0), "Invalid admin address");
+        if (newAdmin == address(0)) revert Error.InvalidAdminAddress();
         pendingAdminTransfers[newAdmin] = PendingAdminTransfer({
             newAdmin: newAdmin,
             oldAdmin: msg.sender,
@@ -186,20 +187,23 @@ contract RoleManager is AccessControl, Pausable {
     /// @dev Reverts if no transfer is proposed, timelock is not expired, or old admin lacks role. Emits AdminTransferAccepted event.
     function acceptAdminTransfer() external {
         PendingAdminTransfer memory transfer = pendingAdminTransfers[msg.sender];
-        require(hasRole(DEFAULT_ADMIN_ROLE, transfer.oldAdmin), "Old admin lacks DEFAULT_ADMIN_ROLE");
-        require(transfer.executableAfter != 0, "No transfer proposed");
-        require(block.timestamp >= transfer.executableAfter, "Timelock not expired");
+        if (!(hasRole(DEFAULT_ADMIN_ROLE, transfer.oldAdmin))) revert Error.OldAdminLacksDefaultAdminRole();
+        if (transfer.executableAfter == 0 ) revert  Error.ActionNotProposed();
+        if (block.timestamp < transfer.executableAfter) revert  Error.TimelockNotExpired();
+        
+        delete pendingAdminTransfers[msg.sender];  
+        
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _revokeRole(DEFAULT_ADMIN_ROLE, transfer.oldAdmin);
+        
         emit AdminTransferAccepted(transfer.oldAdmin, msg.sender);
-        delete pendingAdminTransfers[msg.sender];
     }
 
     /// @notice Sets the timelock delay period
     /// @param role The role to setTimelock.
-    /// @param daysCount Number of days for the delay (will be converted to seconds)
+    /// @param daysCount Number of days for the delay 
     function setTimelock( bytes32 role , uint256 daysCount ) external onlyRole(getRoleAdmin(role)){
-            require(daysCount > 0, "Delay must be at least 1 day");
+            if (daysCount == 0) revert Error.DelayMustBeAtLeastOneDay();
             uint256 newDelay = daysCount * 1 days;
             emit TimelockDelayChanged(MIN_TIMELOCK_DELAY, newDelay);
             MIN_TIMELOCK_DELAY = newDelay;

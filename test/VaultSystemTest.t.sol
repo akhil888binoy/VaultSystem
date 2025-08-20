@@ -6,6 +6,7 @@ import "../contracts/vault/Vault.sol";
 import "../contracts/router/WalletRouter.sol";
 import "../contracts/access/RoleManager.sol";
 import "../contracts/timelock/Timelock.sol";
+import "../contracts/error/Error.sol";
 import "@openzeppelin-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin-upgradeable/contracts/token/ERC20/ERC20Upgradeable.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -37,8 +38,6 @@ contract VaultSystemTest is Test {
     bytes32 constant VAULT_ADMIN_ROLE = keccak256("VAULT_ADMIN_ROLE");
     bytes32 constant ROUTER_ADMIN_ROLE = keccak256("ROUTER_ADMIN_ROLE");
     bytes32 constant DEFAULT_ADMIN_ROLE = 0x00;
-    bytes32 constant ADD_TOKEN = keccak256("ADD_TOKEN");
-    bytes32 constant REMOVE_TOKEN = keccak256("REMOVE_TOKEN");
     bytes32 constant SET_WALLETROUTER = keccak256("SET_WALLETROUTER");
     bytes32 constant SET_VAULT = keccak256("SET_VAULT");
     bytes32 constant RECOVER_FUNDS = keccak256("RECOVER_FUNDS");
@@ -84,6 +83,7 @@ contract VaultSystemTest is Test {
         // walletRouter.proposeSetVault(address(vault));
         // vm.warp(block.timestamp + 1 days + 1);
         walletRouter.setVault(address(vault));
+        timelock.setVault(address(vault));
 
         // Deploy and initialize Mock ERC20 token
         token = new MockERC20();
@@ -96,7 +96,7 @@ contract VaultSystemTest is Test {
         vm.deal(user2, 100 ether);
 
         // Grant roles
-       bytes32 actionId = keccak256(abi.encode(OPERATOR_ROLE, operator, true, block.timestamp));
+        bytes32 actionId = keccak256(abi.encode(OPERATOR_ROLE, operator, true, block.timestamp));
         roleManager.proposeGrantRole(OPERATOR_ROLE, operator);
         vm.warp(block.timestamp + 1 days + 1);
         roleManager.executeRoleAction(actionId);
@@ -141,7 +141,7 @@ contract VaultSystemTest is Test {
         walletRouter.deposit(address(token), 100 ether);
 
         vm.prank(multiSigAdmin);
-        vm.expectRevert("Cannot remove token with deposits");
+        vm.expectRevert(Error.CannotRemoveTokenWithDeposits.selector);
         vault.removeSupportedToken(address(token));
 
         // Withdraw and remove
@@ -204,21 +204,21 @@ contract VaultSystemTest is Test {
 
     function testVaultAccessControl() public {
         vm.prank(user1);
-        vm.expectRevert("Caller lacks VAULT_ADMIN_ROLE");
+        vm.expectRevert(Error.CallerLacksVaultAdminRole.selector);
         vault.addSupportedToken(address(token));
 
         vm.prank(user1);
-        vm.expectRevert("Not WalletRouter");
+        vm.expectRevert(Error.InvalidWalletRouter.selector);
         vault.handleDeposit{value: 1 ether}(user1, address(0), 1 ether);
     }
 
     function testWalletRouterAccessControl() public {
         vm.prank(user1);
-        vm.expectRevert("Not operator");
+        vm.expectRevert(Error.NotOperator.selector);
         walletRouter.withdraw(user2, address(0), 1 ether);
 
         vm.prank(user1);
-        vm.expectRevert("Not router admin");
+        vm.expectRevert(Error.NotRouterAdmin.selector);
         walletRouter.pause();
     }
 
@@ -226,7 +226,7 @@ contract VaultSystemTest is Test {
         vm.startPrank(multiSigAdmin);
         bytes32 actionId = keccak256(abi.encode(SET_WALLETROUTER, address(0x999), block.timestamp));
         vault.proposeSetWalletRouter(address(0x999));
-        vm.expectRevert("Timelock not expired");
+        vm.expectRevert(Error.TimelockNotExpired.selector);
         vault.setWalletRouter(address(0x999), actionId);
 
         vm.warp(block.timestamp + 1 days + 1);
@@ -250,22 +250,22 @@ contract VaultSystemTest is Test {
 
     function testInvalidInputs() public {
         vm.prank(user1);
-        vm.expectRevert("Invalid amount");
+        vm.expectRevert(Error.InvalidAmount.selector);
         walletRouter.deposit{value: 0}(address(0), 0);
 
         vm.prank(user1);
-        vm.expectRevert("Token not supported");
+        vm.expectRevert(Error.TokenNotSupported.selector);
         walletRouter.deposit(address(token), 100 ether);
 
         vm.prank(multiSigAdmin);
-        vm.expectRevert("Invalid WalletRouter");
+        vm.expectRevert(Error.InvalidWalletRouter.selector);
         vault.proposeSetWalletRouter(address(0));
     }
 
     function testUpgradeAuthorization() public {
         Vault newVaultImpl = new Vault();
         vm.prank(user1);
-        vm.expectRevert("Caller lacks VAULT_ADMIN_ROLE");
+        vm.expectRevert(Error.CallerLacksVaultAdminRole.selector);
         vault.upgradeTo(address(newVaultImpl));
 
         vm.prank(multiSigAdmin);
@@ -284,20 +284,165 @@ contract VaultSystemTest is Test {
         assertFalse(roleManager.hasRole(DEFAULT_ADMIN_ROLE, multiSigAdmin));
     }
 
-    // function testEventEmissions() public {
-    //     vm.startPrank(multiSigAdmin);
-    //     bytes32 actionId = keccak256(abi.encode(ADD_TOKEN, address(token), block.timestamp));
-    //     vm.expectEmit(true, true, false, true);
-    //     emit vault.TokenSupportAdded(address(token));
-    //     vault.proposeAddToken(address(token));
-    //     vm.warp(block.timestamp + 1 days + 1);
-    //     vault.addSupportedToken(address(token), actionId);
+   // Add this to your VaultSystemTest contract
 
-    //     vm.stopPrank();
-    //     vm.prank(user1);
-    //     token.approve(address(walletRouter), 100 ether);
-    //     vm.expectEmit(true, true, false, true);
-    //     emit walletRouter.Deposit(user1, address(token), 100 ether, block.timestamp);
-    //     walletRouter.deposit(address(token), 100 ether);
-    // }
+function testSweepDustETH() public {
+    // Setup: Send ETH directly to vault (unsupported)
+    vm.deal(address(vault), 5 ether);
+    assertEq(address(vault).balance, 5 ether);
+    assertEq(vault.totalDeposits(address(0)), 0); // No tracked deposits
+
+    // Propose sweep
+    vm.startPrank(multiSigAdmin);
+    bytes32 actionId = keccak256(abi.encode(
+        vault.SWEEP_DUST(),
+        address(0),
+        multiSigAdmin,
+        3 ether,
+        block.timestamp
+    ));
+    vault.proposeSweepDust(address(0), multiSigAdmin, 3 ether);
+    
+    // Attempt early execution (should fail)
+    vm.expectRevert(Error.TimelockNotExpired.selector);
+    vault.sweepDust(address(0), payable(multiSigAdmin), 3 ether, actionId);
+
+    // Fast-forward and execute
+    vm.warp(block.timestamp + timelock.MIN_TIMELOCK_DELAY() + 1);
+    vault.sweepDust(address(0), payable(multiSigAdmin), 3 ether, actionId);
+
+    // Verify
+    assertEq(address(vault).balance, 2 ether); // 5 - 3
+    assertEq(multiSigAdmin.balance, 3 ether);
+}
+
+function testSweepDustERC20() public {
+    // Deploy and mint dust token (unsupported)
+    MockERC20 dustToken = new MockERC20();
+    dustToken.initialize("Dust", "DST");
+    dustToken.mint(address(vault), 1000 ether);
+
+    // Propose sweep
+    vm.startPrank(multiSigAdmin);
+    bytes32 actionId = keccak256(abi.encode(
+        vault.SWEEP_DUST(),
+        address(dustToken),
+        multiSigAdmin,
+        500 ether,
+        block.timestamp
+    ));
+    vault.proposeSweepDust(address(dustToken), multiSigAdmin, 500 ether);
+    
+    // Execute after delay
+    vm.warp(block.timestamp + timelock.MIN_TIMELOCK_DELAY() + 1);
+    vault.sweepDust(address(dustToken), payable(multiSigAdmin), 500 ether, actionId);
+
+    // Verify
+    assertEq(dustToken.balanceOf(address(vault)), 500 ether);
+    assertEq(dustToken.balanceOf(multiSigAdmin), 500 ether);
+}
+
+// function testCannotSweepSupportedTokens() public {
+//     // Setup supported token deposit
+//     vm.startPrank(multiSigAdmin);
+//     vault.addSupportedToken(address(token));
+//     vm.stopPrank();
+
+//     vm.prank(user1);
+//     token.approve(address(walletRouter), 100 ether);
+//     vm.prank(user1);
+//     walletRouter.deposit(address(token), 100 ether);
+
+//     // Attempt to sweep (should fail)
+//     vm.startPrank(multiSigAdmin);
+//     vm.expectRevert("Cannot sweep supported tokens");
+//     vault.proposeSweepDust(address(token), multiSigAdmin, 50 ether);
+// }
+
+function testCannotSweepDepositedETH() public {
+    // Make a deposit
+    vm.prank(user1);
+    walletRouter.deposit{value: 2 ether}(address(0), 2 ether);
+
+    // Send extra ETH directly (dust)
+    vm.deal(address(vault), 5 ether); // 2 deposited + 3 dust
+
+    // Should only allow sweeping the dust (3 ETH)
+    vm.startPrank(multiSigAdmin);
+    bytes32 actionId = keccak256(abi.encode(
+        vault.SWEEP_DUST(),
+        address(0),
+        multiSigAdmin,
+        4 ether, // Attempt to over-sweep
+        block.timestamp
+    ));
+    vault.proposeSweepDust(address(0), multiSigAdmin, 4 ether);
+    vm.warp(block.timestamp + timelock.MIN_TIMELOCK_DELAY() + 1);
+    
+    vm.expectRevert(Error.CannotSweepTokenWithDeposit.selector);
+    vault.sweepDust(address(0), payable(multiSigAdmin), 4 ether, actionId);
+
+    // Should succeed with correct amount (3 ETH)
+    actionId = keccak256(abi.encode(
+        vault.SWEEP_DUST(),
+        address(0),
+        multiSigAdmin,
+        3 ether,
+        block.timestamp
+    ));
+    vault.proposeSweepDust(address(0), multiSigAdmin, 3 ether);
+    vm.warp(block.timestamp + timelock.MIN_TIMELOCK_DELAY() + 1);
+    vault.sweepDust(address(0), payable(multiSigAdmin), 3 ether, actionId);
+}
+
+function testSweepDustAccessControl() public {
+    // Non-admin cannot propose
+    vm.prank(user1);
+    vm.expectRevert(Error.CallerLacksVaultAdminRole.selector);
+    vault.proposeSweepDust(address(0), user1, 1 ether);
+
+    // Non-admin cannot execute
+    vm.startPrank(multiSigAdmin);
+    bytes32 actionId = keccak256(abi.encode(
+        vault.SWEEP_DUST(),
+        address(0),
+        multiSigAdmin,
+        1 ether,
+        block.timestamp
+    ));
+    vault.proposeSweepDust(address(0), multiSigAdmin, 1 ether);
+    vm.stopPrank();
+
+    vm.warp(block.timestamp + timelock.MIN_TIMELOCK_DELAY() + 1);
+    vm.prank(user1);
+    vm.expectRevert(Error.CallerLacksVaultAdminRole.selector);
+    vault.sweepDust(address(0), payable(multiSigAdmin), 1 ether, actionId);
+}
+
+function testSweepDustParameterTampering() public {
+    // Setup dust
+    vm.deal(address(vault), 5 ether);
+
+    // Propose with correct params
+    vm.startPrank(multiSigAdmin);
+    bytes32 actionId = keccak256(abi.encode(
+        vault.SWEEP_DUST(),
+        address(0),
+        multiSigAdmin,
+        3 ether,
+        block.timestamp
+    ));
+    vault.proposeSweepDust(address(0), multiSigAdmin, 3 ether);
+    vm.warp(block.timestamp + timelock.MIN_TIMELOCK_DELAY() + 1);
+
+    // Attempt to tamper with recipient
+    vm.expectRevert(Error.RecipientMismatch.selector);
+    vault.sweepDust(address(0), payable(user1), 3 ether, actionId); // Wrong recipient
+
+    // Attempt to tamper with amount
+    vm.expectRevert(Error.AmountMismatch.selector);
+    vault.sweepDust(address(0), payable(multiSigAdmin), 4 ether, actionId); // Wrong amount
+}
+
+
 }

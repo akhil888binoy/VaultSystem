@@ -9,10 +9,11 @@ import "@openzeppelin-upgradeable/contracts/token/ERC20/utils/SafeERC20Upgradeab
 import "@openzeppelin-upgradeable/contracts/utils/AddressUpgradeable.sol";
 import "../interface/IRoleManager.sol";
 import "../interface/ITimelock.sol";
+import "../error/Error.sol";
 
 /// @title Vault
-/// @notice Manages deposits and withdrawals of supported tokens, with upgradeability and access control.
-/// @dev Uses UUPS proxy pattern for upgradeability and integrates with RoleManager and Timelock for security.
+/// @notice Manages deposits, withdrawals, and token support for ETH and ERC20 tokens with upgradeability, access control, and timelock integration.
+/// @dev Implements UUPS proxy pattern, ReentrancyGuard, and Pausable from OpenZeppelin, integrating with RoleManager and Timelock for secure operations.
 contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, PausableUpgradeable {
     using SafeERC20Upgradeable for IERC20Upgradeable;
     using AddressUpgradeable for address payable;
@@ -32,41 +33,41 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
     /// @notice Mapping of token addresses to their total deposited amounts.
     mapping(address => uint256) public totalDeposits;
 
-    /// @notice Emitted when a deposit is processed.
-    /// @param user The address of the user depositing funds.
-    /// @param token The token address (address(0) for ETH).
-    /// @param amount The amount deposited.
+    /// @notice Emitted when a deposit is successfully processed.
+    /// @param user Address of the user depositing funds.
+    /// @param token Token address (address(0) for ETH).
+    /// @param amount Amount of tokens or ETH deposited.
     event DepositProcessed(address indexed user, address indexed token, uint256 amount);
 
-    /// @notice Emitted when a withdrawal is processed.
-    /// @param recipient The address receiving the withdrawn funds.
-    /// @param token The token address (address(0) for ETH).
-    /// @param amount The amount withdrawn.
+    /// @notice Emitted when a withdrawal is successfully processed.
+    /// @param recipient Address receiving the withdrawn funds.
+    /// @param token Token address (address(0) for ETH).
+    /// @param amount Amount of tokens or ETH withdrawn.
     event WithdrawalProcessed(address indexed recipient, address indexed token, uint256 amount);
 
     /// @notice Emitted when a token is added to the supported tokens list.
-    /// @param token The token address added.
+    /// @param token Token address added (address(0) for ETH).
     event TokenSupportAdded(address indexed token);
 
     /// @notice Emitted when a token is removed from the supported tokens list.
-    /// @param token The token address removed.
+    /// @param token Token address removed (address(0) for ETH).
     event TokenSupportRemoved(address indexed token);
 
     /// @notice Emitted when the WalletRouter address is updated.
-    /// @param walletRouter The new WalletRouter address.
+    /// @param walletRouter New WalletRouter address.
     event WalletRouterSet(address indexed walletRouter);
 
-    /// @notice Emitted when funds are recovered from the vault.
-    /// @param token The token address recovered (address(0) for ETH).
-    /// @param recipient The address receiving the recovered funds.
-    /// @param amount The amount recovered.
+    /// @notice Emitted when funds are recovered from the Vault.
+    /// @param token Token address recovered (address(0) for ETH).
+    /// @param recipient Address receiving the recovered funds.
+    /// @param amount Amount of tokens or ETH recovered.
     event FundsRecovered(address indexed token, address indexed recipient, uint256 amount);
 
-    /// @notice Constant for the ADD_TOKEN action identifier used in timelock proposals.
-    bytes32 public constant ADD_TOKEN = keccak256("ADD_TOKEN");
-
-    /// @notice Constant for the REMOVE_TOKEN action identifier used in timelock proposals.
-    bytes32 public constant REMOVE_TOKEN = keccak256("REMOVE_TOKEN");
+    /// @notice Emitted when untracked (dust) tokens or ETH are swept from the Vault.
+    /// @param token Token address swept (address(0) for ETH).
+    /// @param to Address receiving the swept funds.
+    /// @param amount Amount of tokens or ETH swept.
+    event DustSwept(address indexed token, address indexed to, uint256 amount);
 
     /// @notice Constant for the SET_WALLETROUTER action identifier used in timelock proposals.
     bytes32 public constant SET_WALLETROUTER = keccak256("SET_WALLETROUTER");
@@ -74,25 +75,30 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
     /// @notice Constant for the RECOVER_FUNDS action identifier used in timelock proposals.
     bytes32 public constant RECOVER_FUNDS = keccak256("RECOVER_FUNDS");
 
-    /// @notice Constructor to disable initialization of the implementation contract.
-    /// @dev Prevents the implementation from being initialized directly.
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor()  { _disableInitializers(); }
+    /// @notice Constant for the SWEEP_DUST action identifier used in timelock proposals.
+    bytes32 public constant SWEEP_DUST = keccak256("SWEEP_DUST");
 
-    /// @notice Initializes the vault with RoleManager, WalletRouter, and Timelock addresses.
-    /// @param _roleManager Address of the RoleManager contract.
-    /// @param _walletRouter Address of the WalletRouter contract.
-    /// @param _timelock Address of the Timelock contract.
-    /// @dev Reverts if any address is invalid or WalletRouter is not a contract. Enables ETH support by default.
+    /// @notice Constructor to disable initialization of the implementation contract.
+    /// @dev Prevents the implementation contract from being initialized directly, ensuring safety for UUPS proxy upgrades.
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    /// @notice Initializes the Vault with RoleManager, WalletRouter, and Timelock addresses.
+    /// @param _roleManager Address of the RoleManager contract for access control.
+    /// @param _walletRouter Address of the WalletRouter contract for routing deposits and withdrawals.
+    /// @param _timelock Address of the Timelock contract for delayed operations.
+    /// @dev Reverts if any address is zero or if WalletRouter is not a contract. Initializes UUPS, ReentrancyGuard, and Pausable. Enables ETH support by default. Emits TokenSupportAdded for ETH.
     function initialize(address _roleManager, address _walletRouter, address _timelock) public initializer {
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
         __Pausable_init();
 
-        require(_roleManager != address(0), "Invalid RoleManager");
-        require(_walletRouter != address(0), "Invalid WalletRouter");
-        require(_timelock != address(0), "Invalid Timelock");
-        require(isContract(_walletRouter), "WalletRouter is not a contract");
+        if (_roleManager == address(0)) revert Error.InvalidRoleManager();
+        if (_walletRouter == address(0)) revert Error.InvalidWalletRouter();
+        if (_timelock == address(0)) revert Error.InvalidTimelock();
+        if (!isContract(_walletRouter)) revert  Error.WalletRouterIsNotAContract();
 
         roleManager = IRoleManager(_roleManager);
         timelock = ITimelock(_timelock);
@@ -103,128 +109,173 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
     }
 
     /// @notice Restricts function access to accounts with the VAULT_ADMIN_ROLE.
-    /// @dev Reverts if the caller does not have the VAULT_ADMIN_ROLE.
+    /// @dev Reverts if the caller lacks the VAULT_ADMIN_ROLE from the RoleManager.
     modifier onlyVaultAdmin() {
-        require(roleManager.hasRole(roleManager.VAULT_ADMIN_ROLE(), msg.sender), "Caller lacks VAULT_ADMIN_ROLE");
+        if (!roleManager.hasRole(roleManager.VAULT_ADMIN_ROLE(), msg.sender)) revert Error.CallerLacksVaultAdminRole();
         _;
     }
 
     /// @notice Restricts function access to the WalletRouter contract.
-    /// @dev Reverts if the caller is not the WalletRouter.
+    /// @dev Reverts if the caller is not the current WalletRouter address.
     modifier onlyWalletRouter() {
-        require(msg.sender == walletRouter, "Not WalletRouter");
+        if (msg.sender != walletRouter) revert  Error.InvalidWalletRouter();
         _;
     }
 
     /// @notice Restricts function access to supported tokens only.
-    /// @param token The token address to check (address(0) for ETH).
-    /// @dev Reverts if the token is not supported.
+    /// @param token Token address to check (address(0) for ETH).
+    /// @dev Reverts if the token is not supported in the supportedTokens mapping.
     modifier onlySupportedToken(address token) {
-        require(supportedTokens[token], "Token not supported");
+        if (!supportedTokens[token]) revert  Error.TokenNotSupported();
         _;
     }
 
-    /// @notice Checks if a token is supported.
-    /// @param token The token address to check (address(0) for ETH).
+    /// @notice Checks if a token is supported by the Vault.
+    /// @param token Token address to check (address(0) for ETH).
     /// @return True if the token is supported, false otherwise.
     function isSupportedToken(address token) external view returns (bool) {
         return supportedTokens[token];
     }
 
-    /// @notice Records a deposit of a supported token for a user.
-    /// @param user The user making the deposit.
-    /// @param token The token address (address(0) for ETH).
-    /// @param amount The amount to deposit.
-    /// @dev Only callable by WalletRouter. Reverts if paused, token is not supported, or incorrect ETH amount. Emits DepositProcessed event.
-    function handleDeposit(address user, address token, uint256 amount) external  payable onlyWalletRouter onlySupportedToken(token) whenNotPaused {
+    /// @notice Records a deposit of a supported token or ETH for a user.
+    /// @param user Address of the user depositing funds.
+    /// @param token Token address (address(0) for ETH).
+    /// @param amount Amount of tokens or ETH to deposit.
+    /// @dev Only callable by WalletRouter when not paused. Reverts if token is not supported or contract is paused. Updates totalDeposits and emits DepositProcessed event.
+    function handleDeposit(address user, address token, uint256 amount) external payable onlyWalletRouter onlySupportedToken(token) whenNotPaused {
         totalDeposits[token] += amount;
         emit DepositProcessed(user, token, amount);
     }
 
-    /// @notice Processes a withdrawal of a supported token to a recipient.
-    /// @param recipient The recipient of the withdrawal.
-    /// @param token The token address (address(0) for ETH).
-    /// @param amount The amount to withdraw.
-    /// @dev Only callable by WalletRouter. Reverts if paused, token is not supported, or insufficient balance. Emits WithdrawalProcessed event.
-    function handleWithdrawal(address recipient, address token, uint256 amount) external  onlyWalletRouter onlySupportedToken(token) whenNotPaused {
-        require(totalDeposits[token] >= amount, "Insufficient tracked deposits");
-        if (token == address(0)) {
-            require(address(this).balance >= amount, "Insufficient Vault ETH balance");
-            payable(recipient).sendValue(amount);
-        } else {
-            require(IERC20Upgradeable(token).balanceOf(address(this)) >= amount, "Insufficient Vault token balance");
-            IERC20Upgradeable(token).safeTransfer(recipient, amount);
-        }
-        totalDeposits[token] -= amount;
-        emit WithdrawalProcessed(recipient, token, amount);
+    /// @notice Processes a withdrawal of a supported token or ETH to a recipient.
+    /// @param recipient Address to receive the withdrawn funds.
+    /// @param token Token address (address(0) for ETH).
+    /// @param amount Amount of tokens or ETH to withdraw.
+    /// @dev Only callable by WalletRouter when not paused. Reverts if token is not supported, contract is paused, or insufficient balance. Updates totalDeposits and emits WithdrawalProcessed event.
+    function handleWithdrawal(address recipient, address token, uint256 amount) 
+            external 
+            onlyWalletRouter 
+            onlySupportedToken(token) 
+            whenNotPaused 
+            nonReentrant  
+        {
+            if (totalDeposits[token] < amount) revert  Error.InsufficientTrackedDeposits();
+            
+            if (token == address(0)) {
+                if (address(this).balance < amount) revert  Error.InsufficientVaultETHBalance();
+            } else {
+                if (IERC20Upgradeable(token).balanceOf(address(this)) < amount) revert  Error.InsufficientVaultTokenBalance();
+            }
+            
+            totalDeposits[token] -= amount;
+            emit WithdrawalProcessed(recipient, token, amount);
+            
+            if (token == address(0)) {
+                payable(recipient).sendValue(amount);
+            } else {
+                IERC20Upgradeable(token).safeTransfer(recipient, amount);
+            }
     }
 
-
-    /// @notice Executes the addition of a supported token after timelock validation.
-    /// @param token The token address to add.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Emits TokenSupportAdded event.
+    /// @notice Adds a token to the supported tokens list.
+    /// @param token Token address to add (address(0) for ETH).
+    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if token is already supported or if a non-ETH token is not a contract. Emits TokenSupportAdded event.
     function addSupportedToken(address token) external onlyVaultAdmin {
-        require(!supportedTokens[token], "Token already supported");
+        if (supportedTokens[token]) revert  Error.TokenAlreadySupported();
         if (token != address(0)) {
-            require(isContract(token), "Token is not a contract");
+            if (!isContract(token)) revert  Error.TokenIsNotAContract();
         }
         supportedTokens[token] = true;
         emit TokenSupportAdded(token);
     }
 
-
-    /// @notice Executes the removal of a supported token after timelock validation.
-    /// @param token The token address to remove.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Emits TokenSupportRemoved event.
+    /// @notice Removes a token from the supported tokens list.
+    /// @param token Token address to remove (address(0) for ETH).
+    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if token is not supported, or if token/ETH has remaining deposits or balance. Emits TokenSupportRemoved event.
     function removeSupportedToken(address token) external onlyVaultAdmin {
-        require(supportedTokens[token], "Token not supported");
-        require(totalDeposits[token] == 0, "Cannot remove token with deposits");
+        if (!supportedTokens[token]) revert  Error.TokenNotSupported();
+        if (totalDeposits[token] != 0) revert  Error.CannotRemoveTokenWithDeposits();
         if (token == address(0)) {
-            require(address(this).balance == 0, "Vault has ETH balance");
+            if (address(this).balance != 0) revert  Error.VaultHasETHBalance();
         } else {
-            require(IERC20Upgradeable(token).balanceOf(address(this)) == 0, "Vault has token balance");
+            if (IERC20Upgradeable(token).balanceOf(address(this)) != 0) revert Error.VaultHasTokenBalance();
         }
         supportedTokens[token] = false;
         emit TokenSupportRemoved(token);
     }
 
-    /// @notice Proposes setting a new WalletRouter address via the timelock.
-    /// @param _walletRouter The proposed new WalletRouter address.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if address is invalid.
-    function proposeSetWalletRouter(address _walletRouter) external onlyVaultAdmin {
-        require(_walletRouter != address(0), "Invalid WalletRouter");
-        timelock.proposeSetWalletRouter(_walletRouter, SET_WALLETROUTER, msg.sender);
+    /// @notice Proposes sweeping untracked (dust) tokens or ETH via the Timelock.
+    /// @param token Token address to sweep (address(0) for ETH).
+    /// @param to Address to receive the swept funds.
+    /// @param amount Amount of tokens or ETH to sweep.
+    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if recipient is zero or amount is zero. Calls Timelock to propose the action.
+    function proposeSweepDust(address token, address to, uint256 amount) external onlyVaultAdmin {
+        if (to == address(0)) revert Error.InvalidRecipient();
+        if (amount == 0) revert  Error.InvalidAmount();
+        timelock.proposeSweepDust(token, to, amount, SWEEP_DUST);
     }
 
-    /// @notice Executes the setting of a new WalletRouter address after timelock validation.
-    /// @param _walletRouter The new WalletRouter address.
-    /// @param actionId The identifier of the proposed action.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Emits WalletRouterSet event.
+    /// @notice Executes sweeping of untracked (dust) tokens or ETH after timelock validation.
+    /// @param token Token address to sweep (address(0) for ETH).
+    /// @param to Recipient address to receive the swept funds.
+    /// @param amount Amount of tokens or ETH to sweep.
+    /// @param actionId Unique identifier of the proposed action.
+    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if amount is zero, token is supported, timelock execution fails, or insufficient untracked balance. Emits DustSwept event.
+    function sweepDust(address token, address  to, uint256 amount, bytes32 actionId) external onlyVaultAdmin {
+        if (amount < 0) revert Error.InvalidAmount();
+        if (!timelock.executeSweepDust(actionId, token, to, amount)) revert Error.ExecutionFailed();
+
+        if (token == address(0)) {
+            uint256 unaccountedETH = address(this).balance - totalDeposits[address(0)];
+            if (amount > unaccountedETH) revert  Error.CannotSweepTokenWithDeposit();
+            payable(to).sendValue(amount);
+        } else {
+            if (!isContract(token)) revert  Error.TokenIsNotAContract();
+            uint256 unaccounted = IERC20Upgradeable(token).balanceOf(address(this)) - totalDeposits[token];
+            if (amount >  unaccounted) revert  Error.CannotSweepTokenWithDeposit();
+            IERC20Upgradeable(token).safeTransfer(to, amount);
+        }
+        emit DustSwept(token, to, amount);
+    }
+
+    /// @notice Proposes setting a new WalletRouter address via the Timelock.
+    /// @param _walletRouter Proposed new WalletRouter address.
+    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if address is zero. Calls Timelock to propose the action.
+    function proposeSetWalletRouter(address _walletRouter) external onlyVaultAdmin {
+        if (_walletRouter == address(0)) revert  Error.InvalidWalletRouter();
+        timelock.proposeSetWalletRouter(_walletRouter, SET_WALLETROUTER);
+    }
+
+    /// @notice Executes setting a new WalletRouter address after timelock validation.
+    /// @param _walletRouter New WalletRouter address.
+    /// @param actionId Unique identifier of the proposed action.
+    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if timelock execution fails. Updates walletRouter and emits WalletRouterSet event.
     function setWalletRouter(address _walletRouter, bytes32 actionId) external onlyVaultAdmin {
-        require(timelock.executeSetWalletRouter(actionId, _walletRouter, msg.sender), "Set WalletRouter not executed");
+        if (!timelock.executeSetWalletRouter(actionId, _walletRouter)) revert  Error.SetWalletRouterNotExecuted();
         walletRouter = _walletRouter;
         emit WalletRouterSet(_walletRouter);
     }
 
-    /// @notice Proposes recovering funds from the vault via the timelock.
-    /// @param token The token address to recover (address(0) for ETH).
-    /// @param recipient The address to receive the recovered funds.
-    /// @param amount The amount to recover.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if recipient is invalid.
+    /// @notice Proposes recovering funds from the Vault via the Timelock.
+    /// @param token Token address to recover (address(0) for ETH).
+    /// @param recipient Address to receive the recovered funds.
+    /// @param amount Amount of tokens or ETH to recover.
+    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if recipient is zero. Calls Timelock to propose the action.
     function proposeRecoverFunds(address token, address recipient, uint256 amount) external onlyVaultAdmin {
-        require(recipient != address(0), "Invalid recipient");
-        timelock.proposeRecoverFunds(token, recipient, amount, keccak256("RECOVER_FUNDS"), msg.sender);
+        if (recipient == address(0)) revert  Error.InvalidRecipient();
+        if (amount == 0) revert Error.InvalidAmount();
+        timelock.proposeRecoverFunds(token, recipient, amount, RECOVER_FUNDS);
     }
 
-    /// @notice Executes the recovery of funds after timelock validation.
-    /// @param token The token address to recover (address(0) for ETH).
-    /// @param recipient The address to receive the recovered funds.
-    /// @param amount The amount to recover.
-    /// @param actionId The identifier of the proposed action.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Emits FundsRecovered event.
+    /// @notice Executes recovering funds from the Vault after timelock validation.
+    /// @param token Token address to recover (address(0) for ETH).
+    /// @param recipient Address to receive the recovered funds.
+    /// @param amount Amount of tokens or ETH to recover.
+    /// @param actionId Unique identifier of the proposed action.
+    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if timelock execution fails or insufficient tracked deposits. Updates totalDeposits and emits FundsRecovered event.
     function recoverFunds(address token, address recipient, uint256 amount, bytes32 actionId) external onlyVaultAdmin {
-        require(timelock.executeRecoverFunds(actionId, token, msg.sender), "Recover funds not executed");
-        require(totalDeposits[token] >= amount, "Insufficient tracked deposits");
+        if (!timelock.executeRecoverFunds(actionId, token, recipient, amount)) revert  Error.RecoverFundsNotExecuted();
+        if (totalDeposits[token] < amount) revert  Error.InsufficientTrackedDeposits();
         totalDeposits[token] -= amount;
         if (token == address(0)) {
             payable(recipient).sendValue(amount);
@@ -234,34 +285,38 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
         emit FundsRecovered(token, recipient, amount);
     }
 
-    /// @notice Pauses deposits and withdrawals.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Inherits from PausableUpgradeable.
+    /// @notice Pauses deposits and withdrawals in the Vault.
+    /// @dev Only callable by VAULT_ADMIN_ROLE. Triggers PausableUpgradeable’s _pause function.
     function pause() external onlyVaultAdmin {
         _pause();
     }
 
-    /// @notice Unpauses deposits and withdrawals.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Inherits from PausableUpgradeable.
+    /// @notice Unpauses deposits and withdrawals in the Vault.
+    /// @dev Only callable by VAULT_ADMIN_ROLE. Triggers PausableUpgradeable’s _unpause function.
     function unpause() external onlyVaultAdmin {
         _unpause();
     }
 
-    /// @notice Authorizes a contract upgrade.
-    /// @param newImplementation The new implementation address.
-    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if address is invalid or not a contract.
-    function _authorizeUpgrade(address newImplementation) internal  onlyVaultAdmin override {
-        require(newImplementation != address(0), "Invalid implementation address");
-        require(isContract(newImplementation), "Implementation is not a contract");
+    /// @notice Authorizes a contract upgrade for the UUPS proxy.
+    /// @param newImplementation Address of the new implementation contract.
+    /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if address is zero or not a contract. Required for UUPSUpgradeable.
+    function _authorizeUpgrade(address newImplementation) internal onlyVaultAdmin override {
+        if (newImplementation == address(0)) revert  Error.InvalidImplementationAddress();
+        if (!isContract(newImplementation)) revert  Error.ImplementationIsNotAContract();
     }
 
     /// @notice Checks if an address is a contract.
-    /// @param addr The address to check.
-    /// @return True if the address is a contract, false otherwise.
+    /// @param addr Address to check.
+    /// @return True if the address has code (is a contract), false otherwise.
     function isContract(address addr) internal view returns (bool) {
         uint256 size;
         assembly { size := extcodesize(addr) }
         return size > 0;
     }
 
+    /// @notice Allows the Vault to receive ETH directly.
+    /// @dev Accepts ETH transfers without reverting, typically for untracked (dust) ETH.
     receive() external payable {}
+    uint256[50] private __gap;
+
 }
