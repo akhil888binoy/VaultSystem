@@ -222,7 +222,7 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
     /// @param actionId Unique identifier of the proposed action.
     /// @dev Only callable by VAULT_ADMIN_ROLE. Reverts if amount is zero, token is supported, timelock execution fails, or insufficient untracked balance. Emits DustSwept event.
     function sweepDust(address token, address  to, uint256 amount, bytes32 actionId) external onlyVaultAdmin {
-        if (amount < 0) revert Error.InvalidAmount();
+        if (amount == 0) revert Error.InvalidAmount();
         if (!timelock.executeSweepDust(actionId, token, to, amount)) revert Error.ExecutionFailed();
 
         if (token == address(0)) {
