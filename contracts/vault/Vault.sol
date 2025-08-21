@@ -264,6 +264,7 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
     function proposeRecoverFunds(address token, address recipient, uint256 amount) external onlyVaultAdmin {
         if (recipient == address(0)) revert  Error.InvalidRecipient();
         if (amount == 0) revert Error.InvalidAmount();
+        if (!supportedTokens[token]) revert  Error.TokenNotSupported();
         timelock.proposeRecoverFunds(token, recipient, amount, RECOVER_FUNDS);
     }
 
