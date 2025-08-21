@@ -168,13 +168,14 @@ contract Vault is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable, Pa
             }
             
             totalDeposits[token] -= amount;
-            emit WithdrawalProcessed(recipient, token, amount);
             
             if (token == address(0)) {
                 payable(recipient).sendValue(amount);
             } else {
                 IERC20Upgradeable(token).safeTransfer(recipient, amount);
             }
+            emit WithdrawalProcessed(recipient, token, amount);
+
     }
 
     /// @notice Adds a token to the supported tokens list.

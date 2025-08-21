@@ -205,8 +205,8 @@ contract RoleManager is AccessControl, Pausable {
     function setTimelock( bytes32 role , uint256 daysCount ) external onlyRole(getRoleAdmin(role)){
             if (daysCount == 0) revert Error.DelayMustBeAtLeastOneDay();
             uint256 newDelay = daysCount * 1 days;
-            emit TimelockDelayChanged(MIN_TIMELOCK_DELAY, newDelay);
             MIN_TIMELOCK_DELAY = newDelay;
+            emit TimelockDelayChanged(MIN_TIMELOCK_DELAY, newDelay);
     }
 
     /// @notice Overrides renounceRole to disable direct calls.
