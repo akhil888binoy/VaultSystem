@@ -16,9 +16,8 @@ contract DeployScript is Script {
     function run() public {
         // Load private key from environment
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        uint256 operatorKey = vm.envUint("OPERATOR_KEY");
         address deployer = vm.addr(deployerPrivateKey);
-        address operator = vm.addr(operatorKey);
+        address operator = vm.envAddress("OPERATOR_KEY");
         vm.startBroadcast(deployerPrivateKey);
 
         // Specify multi-sig admin (for testing, same as deployer; in production, use a multi-sig contract)
