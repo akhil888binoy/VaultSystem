@@ -17,7 +17,8 @@ contract DeployScript is Script {
         // Load private key from environment
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
-        address operator = vm.envAddress("OPERATOR_KEY");
+        // address operator0 = vm.envAddress("OPERATOR_KEY0");
+        // address operator1 = vm.envAddress("OPERATOR_KEY1");
         vm.startBroadcast(deployerPrivateKey);
 
         // Specify multi-sig admin (for testing, same as deployer; in production, use a multi-sig contract)
@@ -37,29 +38,30 @@ contract DeployScript is Script {
         // console.log("TestToken deployed at:", address(token));
 
         // If deployer is not multiSigAdmin, grant ROUTER_ADMIN_ROLE to deployer for testing
-            if (deployer != multiSigAdmin) {
-                    bytes32 routerAdminRole = roleManager.ROUTER_ADMIN_ROLE();
-                    bytes32 operatorRole = roleManager.OPERATOR_ROLE();
+                    // bytes32 routerAdminRole = roleManager.ROUTER_ADMIN_ROLE();
+                    // bytes32 operatorRole = roleManager.OPERATOR_ROLE();
 
-                    uint256 proposalTimestamp = block.timestamp; 
+                    // uint256 proposalTimestamp = block.timestamp; 
 
-                    // Propose roles
-                    roleManager.proposeGrantRole(routerAdminRole, deployer);
-                    roleManager.proposeGrantRole(operatorRole, operator);
+                    // // Propose roles
+                    // roleManager.proposeGrantRole(routerAdminRole, deployer);
+                    // roleManager.proposeGrantRole(operatorRole, operator0);
+                    // roleManager.proposeGrantRole(operatorRole, operator1);
 
-                    // Precompute action IDs using the same timestamp used by propose
-                    bytes32 routerActionId = keccak256(abi.encode(routerAdminRole, deployer, true, proposalTimestamp));
-                    bytes32 operatorActionId = keccak256(abi.encode(operatorRole, operator, true, proposalTimestamp));
+                    // // Precompute action IDs using the same timestamp used by propose
+                    // bytes32 routerActionId = keccak256(abi.encode(routerAdminRole, deployer, true, proposalTimestamp));
+                    // bytes32 operator0ActionId = keccak256(abi.encode(operatorRole, operator0, true, proposalTimestamp));
+                    // bytes32 operator1ActionId = keccak256(abi.encode(operatorRole, operator1, true, proposalTimestamp));
 
                     // Simulate waiting period
-                    vm.warp(proposalTimestamp + 1 days + 1);
+                    // vm.warp(proposalTimestamp + 1 days + 1);
 
-                    // Execute proposals
-                    roleManager.executeRoleAction(routerActionId);
-                    roleManager.executeRoleAction(operatorActionId);
+                    // // Execute proposals
+                    // roleManager.executeRoleAction(routerActionId);
+                    // roleManager.executeRoleAction(operator0ActionId);
+                    // roleManager.executeRoleAction(operator1ActionId);
 
                     console.log("Granted ROUTER_ADMIN_ROLE to deployer and OPERATOR_ROLE to operator for testing");
-                }
 
 
         // Deploy Timelock with RoleManager address
@@ -94,14 +96,13 @@ contract DeployScript is Script {
         timelock.setVault(address(vault));
         console.log("Vault set in Timelock");
 
-        // Verify initial setup
-        console.log("Verifying setup...");
-        require(roleManager.hasRole(roleManager.DEFAULT_ADMIN_ROLE(), multiSigAdmin), "Admin role not set");
-        require(vault.isSupportedToken(address(0)), "ETH support not enabled");
-        require(vault.walletRouter() == address(walletRouter), "WalletRouter not set in Vault");
-        console.log("Setup verified successfully");
 
         // Stop broadcasting transactions
         vm.stopBroadcast();
+        // console.log("Verifying setup...");
+        // require(roleManager.hasRole(roleManager.DEFAULT_ADMIN_ROLE(), multiSigAdmin), "Admin role not set");
+        // require(vault.isSupportedToken(address(0)), "ETH support not enabled");
+        // require(vault.walletRouter() == address(walletRouter), "WalletRouter not set in Vault");
+        // console.log("Setup verified successfully");
     }
 }

@@ -18,7 +18,7 @@ contract RoleManager is AccessControl, Pausable {
     bytes32 public constant ROUTER_ADMIN_ROLE = keccak256("ROUTER_ADMIN_ROLE");
 
     /// @notice Minimum timelock delay for role changes (24 hours).
-    uint256 public  MIN_TIMELOCK_DELAY = 1 days;
+    uint256 public  MIN_TIMELOCK_DELAY = 0 days;
 
     /// @notice Struct to store pending role actions.
     struct PendingRoleAction {

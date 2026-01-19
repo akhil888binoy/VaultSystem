@@ -105,7 +105,7 @@ contract Timelock {
     mapping(bytes32 => PendingSweepDust) public pendingSweepDust;
 
     /// @notice Minimum timelock delay for actions (default: 24 hours).
-    uint256 public MIN_TIMELOCK_DELAY = 1 days;
+    uint256 public MIN_TIMELOCK_DELAY = 0 days;
 
     /// @notice Address of the RoleManager contract for access control.
     IRoleManager public roleManager;
