@@ -62,6 +62,10 @@ contract DeployScript is Script {
         timelock.setVault(address(vault));
         console.log("Vault set in Timelock");
 
+        address usdc = vm.envAddress("USDC_ADDRESS");
+        vault.addSupportedToken(usdc);
+        console.log("USDC token whitelisted");
+
         vm.stopBroadcast();
 
         console.log("Deployment & admin setup complete");
