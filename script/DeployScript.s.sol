@@ -3,10 +3,13 @@ pragma solidity ^0.8.0;
 
 import "forge-std/Script.sol";
 import "forge-std/console.sol";  
+
 import "../contracts/access/RoleManager.sol";
 import "../contracts/timelock/Timelock.sol";
 import "../contracts/vault/Vault.sol";
 import "../contracts/router/WalletRouter.sol";
+import "../contracts/mock/MockERC20.sol";
+
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 contract DeployScript is Script {
@@ -50,6 +53,17 @@ contract DeployScript is Script {
         Vault vault = Vault(payable(address(vaultProxy)));
         console.log("Vault proxy:", address(vault));
 
+        /* ---------------- ERC20 DEPLOYMENT ---------------- */
+
+        MockERC20 usdcMock = new MockERC20(
+            "Mock USD Coin",
+            "mUSDC",
+            1_000_000e6, // 1M USDC (6 decimals)
+            operator0
+        );
+
+        console.log("Mock USDC deployed:", address(usdcMock));
+
         vm.stopBroadcast();
 
         /* ---------------- ADMIN SETUP (OPERATOR0) ---------------- */
@@ -62,9 +76,8 @@ contract DeployScript is Script {
         timelock.setVault(address(vault));
         console.log("Vault set in Timelock");
 
-        address usdc = vm.envAddress("USDC_ADDRESS");
-        vault.addSupportedToken(usdc);
-        console.log("USDC token whitelisted");
+        vault.addSupportedToken(address(usdcMock));
+        console.log("Mock USDC token whitelisted");
 
         vm.stopBroadcast();
 
